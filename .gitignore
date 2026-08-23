@@ -31,3 +31,24 @@ lerna-debug.log*
 
 # misc
 .DS_Store
+
+# --- VANGUARD (Go core) ---
+core/vanguard
+core/vanguard-*
+core/*.db
+core/*.db-journal
+core/*.db-wal
+core/*.db-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+core/coverage.out
+
+# --- VANGUARD (Python toolkit) ---
+toolkit/__pycache__/
+toolkit/*.pyc
+toolkit/.venv/
+toolkit/venv/
+toolkit/*.egg-info/
+
