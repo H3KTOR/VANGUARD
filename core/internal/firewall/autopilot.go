@@ -286,6 +286,13 @@ func (a *Autopilot) ReapExpiredBans(ctx context.Context) (int, error) {
 	return count, nil
 }
 
+// ExecutorStatus returns the underlying Executor's raw status dump (e.g.
+// `ufw status verbose`, or the MockExecutor's in-memory summary), exposed
+// for the REST API's diagnostic "System" view.
+func (a *Autopilot) ExecutorStatus(ctx context.Context) (string, error) {
+	return a.exec.Status(ctx)
+}
+
 // ReconcileOnStartup re-applies every currently-active ban from the
 // database to the live OS firewall. This must run once at process start:
 // UFW/iptables rules do NOT persist across a fresh `ufw reset`/reboot the
