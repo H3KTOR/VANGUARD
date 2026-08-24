@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"vanguard/core/internal/database"
+	"vanguard/core/internal/risk"
+	"vanguard/core/internal/thresholds"
 )
 
 // sshBruteForceDefaults mirrors the thresholds from the V1 Detection Engine
@@ -24,8 +26,9 @@ const (
 // /var/log/auth.log) from a single source IP within a short window,
 // optionally followed by one successful login to trigger the CRITICAL
 // "failed-then-success" escalation, then runs them through the same
-// risk-scoring formula the real detection engine uses and persists the
-// resulting Incident (and, unless disabled, a simulated Autopilot ban).
+// risk-scoring formula (internal/risk) the real detection engine uses and
+// persists the resulting Incident (and, unless disabled, a simulated
+// Autopilot ban).
 type sshBruteForceSimulator struct{}
 
 // NewSSHBruteForceSimulator constructs the ssh-bruteforce scenario.
@@ -60,20 +63,7 @@ type sshBruteForceMetadata struct {
 	Attempts         []sshAttemptLog `json:"attempts"`
 	UsernamesTried   []string        `json:"usernames_tried"`
 	SuccessAfterFail bool            `json:"success_after_fail"`
-	ScoreBreakdown   ScoreBreakdown  `json:"score_breakdown"`
-}
-
-// ScoreBreakdown documents how a RiskScore was derived, per the spec's
-// "Risk Score = Base Severity + Frequency + Threat Reputation" formula.
-// Every detector (real or simulated) should populate one of these so the
-// dashboard and the AI Analyst can explain *why* a score is what it is.
-type ScoreBreakdown struct {
-	BaseSeverity    int    `json:"base_severity"`
-	FrequencyBonus  int    `json:"frequency_bonus"`
-	ReputationBonus int    `json:"reputation_bonus"`
-	EscalationBonus int    `json:"escalation_bonus"`
-	Total           int    `json:"total"` // clamped 0-100
-	Explanation     string `json:"explanation"`
+	ScoreBreakdown   risk.Breakdown  `json:"score_breakdown"`
 }
 
 // commonSSHUsernames is a small pool used to make the synthetic attempts
@@ -99,7 +89,7 @@ func (s *sshBruteForceSimulator) Run(ctx context.Context, db *database.DB, opts 
 
 	attempts, usernames := generateSSHAttempts(sourceIP, opts.AttemptCount, opts.WindowSeconds, successAfterFail)
 
-	narrative = append(narrative, "[2/5] Detection engine evaluated events: threshold '>10 failed attempts/IP' EXCEEDED")
+	narrative = append(narrative, fmt.Sprintf("[2/5] Detection engine evaluated events: threshold '>%d failed attempts/IP' EXCEEDED", thresholds.SSHBruteForceMinAttempts))
 
 	incidentType := database.IncidentSSHBruteForce
 	if successAfterFail {
@@ -107,62 +97,17 @@ func (s *sshBruteForceSimulator) Run(ctx context.Context, db *database.DB, opts 
 		narrative = append(narrative, "[2b/5] Successful login observed immediately after failures -> escalation rule triggered (CRITICAL)")
 	}
 
-	// --- Dynamic Risk Scoring: Base Severity + Frequency + Threat Reputation ---
-	breakdown := ScoreBreakdown{BaseSeverity: 40} // SSH brute force base severity
-	if successAfterFail {
-		breakdown.BaseSeverity = 55 // a confirmed compromise attempt starts higher
-	}
+	breakdown := risk.Score(risk.Input{
+		Type:                incidentType,
+		EventCount:          opts.AttemptCount,
+		Threshold:           thresholds.SSHBruteForceMinAttempts,
+		MaxFrequencyBonus:   30,
+		RecentIncidentCount: reputationFor(db, sourceIP, 24*time.Hour),
+		Escalate:            successAfterFail,
+		EscalationNote:      "failed-then-successful login sequence",
+	})
 
-	// Frequency component: scales with volume above the 10-attempt threshold,
-	// capped so a single detector can't alone reach CRITICAL without other
-	// context (mirrors "not simply additive" framing in the spec).
-	over := opts.AttemptCount - 10
-	if over < 0 {
-		over = 0
-	}
-	breakdown.FrequencyBonus = clampScore(over) // e.g. 25 attempts -> +15, capped at 100 by final clamp
-	if breakdown.FrequencyBonus > 30 {
-		breakdown.FrequencyBonus = 30
-	}
-
-	// Threat Reputation component: repeat offenders from the same IP in the
-	// last 24h score higher. Falls back to 0 gracefully if db is nil (dry
-	// preview without a live DB) or the query errors.
-	if db != nil {
-		if count, err := db.CountRecentEventsByIP(sourceIP, time.Now().UTC().Add(-24*time.Hour)); err == nil {
-			rep := int(count) * 5
-			if rep > 20 {
-				rep = 20
-			}
-			breakdown.ReputationBonus = rep
-		}
-	}
-
-	// Escalation bonus: the failed->success sequence is CRITICAL by policy
-	// regardless of other factors, so we push it firmly into the 80+ band.
-	if successAfterFail {
-		breakdown.EscalationBonus = 25
-	}
-
-	riskScore := clampScore(breakdown.BaseSeverity + breakdown.FrequencyBonus + breakdown.ReputationBonus + breakdown.EscalationBonus)
-	breakdown.Total = riskScore
-	breakdown.Explanation = fmt.Sprintf(
-		"base=%d (ssh_bruteforce%s) + frequency=%d (%d attempts) + reputation=%d (repeat-offender history) + escalation=%d (failed->success: %v) = %d",
-		breakdown.BaseSeverity, map[bool]string{true: "+success", false: ""}[successAfterFail],
-		breakdown.FrequencyBonus, opts.AttemptCount, breakdown.ReputationBonus, breakdown.EscalationBonus, successAfterFail, riskScore,
-	)
-	severity := database.SeverityFromScore(riskScore)
-
-	narrative = append(narrative, fmt.Sprintf("[3/5] Risk score calculated: %d/100 (%s) -- %s", riskScore, severity, breakdown.Explanation))
-
-	result := &Result{
-		Scenario:     s.Name(),
-		SourceIP:     sourceIP,
-		AttemptCount: opts.AttemptCount,
-		RiskScore:    riskScore,
-		Severity:     severity,
-		DryRun:       opts.DryRun,
-	}
+	result := &Result{Scenario: s.Name(), DryRun: opts.DryRun}
 
 	meta := sshBruteForceMetadata{
 		Simulated:        true,
@@ -174,75 +119,35 @@ func (s *sshBruteForceSimulator) Run(ctx context.Context, db *database.DB, opts 
 	}
 
 	if opts.DryRun {
+		severity := risk.Severity(breakdown.Total)
+		narrative = append(narrative, fmt.Sprintf("[3/5] Risk score calculated: %d/100 (%s) -- %s", breakdown.Total, severity, breakdown.Explanation))
 		narrative = append(narrative, "[4/5] DRY RUN: incident would be created (no DB write performed)")
 		if opts.AutoBan {
 			narrative = append(narrative, fmt.Sprintf("[5/5] DRY RUN: Autopilot would issue a %s ban on %s", opts.BanDuration, sourceIP))
 		}
+		result.SourceIP = sourceIP
+		result.AttemptCount = opts.AttemptCount
+		result.RiskScore = breakdown.Total
+		result.Severity = severity
 		result.Narrative = narrative
 		return result, nil
 	}
 
-	if db == nil {
-		return nil, fmt.Errorf("simulator: %s requires a database connection unless DryRun is set", s.Name())
+	persisted, err := persistIncident(db, persistParams{
+		IncidentType:   incidentType,
+		SourceIP:       sourceIP,
+		AttemptCount:   opts.AttemptCount,
+		Breakdown:      breakdown,
+		Metadata:       meta,
+		AutoBan:        opts.AutoBan,
+		BanDuration:    opts.BanDuration,
+		NarrativeSoFar: narrative,
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	inc := &database.Incident{
-		Type:         incidentType,
-		SourceIP:     sourceIP,
-		RiskScore:    riskScore,
-		Severity:     severity,
-		Status:       database.StatusOpen,
-		AttemptCount: opts.AttemptCount,
-		DetectedAt:   time.Now().UTC(),
-	}
-	if err := inc.SetMetadata(meta); err != nil {
-		return nil, fmt.Errorf("simulator: failed to encode metadata: %w", err)
-	}
-
-	if err := db.CreateIncident(inc); err != nil {
-		return nil, fmt.Errorf("simulator: failed to persist incident: %w", err)
-	}
-	narrative = append(narrative, fmt.Sprintf("[4/5] Incident #%d created and stored in SQLite", inc.ID))
-	result.Incident = inc
-
-	if opts.AutoBan {
-		// Fail-safe: never fabricate a ban for a whitelisted IP, even in a
-		// simulation -- this exercises the same guard the real Autopilot
-		// must always apply.
-		whitelisted, err := db.IsWhitelisted(sourceIP)
-		if err != nil {
-			return nil, fmt.Errorf("simulator: whitelist check failed: %w", err)
-		}
-		if whitelisted {
-			narrative = append(narrative, fmt.Sprintf("[5/5] Autopilot SKIPPED ban: %s is whitelisted (fail-safe honored)", sourceIP))
-		} else {
-			unbanAt := time.Now().UTC().Add(opts.BanDuration)
-			rule := &database.FirewallRule{
-				IPAddress:  sourceIP,
-				Reason:     fmt.Sprintf("Autopilot: %s (incident #%d, risk %d)", incidentType, inc.ID, riskScore),
-				Source:     database.FirewallSourceSimulator,
-				IsActive:   true,
-				IncidentID: &inc.ID,
-				BannedAt:   time.Now().UTC(),
-				UnbanAt:    &unbanAt,
-			}
-			if err := db.CreateFirewallRule(rule); err != nil {
-				return nil, fmt.Errorf("simulator: failed to persist firewall rule: %w", err)
-			}
-			if err := db.UpdateIncidentStatus(inc.ID, database.StatusAutoBlocked); err != nil {
-				return nil, fmt.Errorf("simulator: failed to update incident status: %w", err)
-			}
-			inc.Status = database.StatusAutoBlocked
-			narrative = append(narrative, fmt.Sprintf("[5/5] Autopilot issued TTL ban on %s for %s (expires %s)",
-				sourceIP, opts.BanDuration, unbanAt.Format(time.RFC3339)))
-			result.FirewallRule = rule
-		}
-	} else {
-		narrative = append(narrative, "[5/5] AutoBan disabled for this run; incident left open for manual review")
-	}
-
-	result.Narrative = narrative
-	return result, nil
+	persisted.Scenario = s.Name()
+	return persisted, nil
 }
 
 // generateSSHAttempts fabricates a realistic sequence of failed (and
