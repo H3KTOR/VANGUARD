@@ -1,9 +1,13 @@
 // Command vanguard is the entrypoint for the VANGUARD Core binary.
 //
-// Step 1 wires up only the database layer and the attack Simulation Engine
-// behind a minimal CLI (`vanguard simulate <scenario>`), so both can be
-// exercised end-to-end before the log tailer, detection engine, REST API,
-// and embedded frontend are layered on in later steps.
+// `vanguard serve` runs the full daemon: SQLite database, detection
+// engine (log tailers + honeypot), Autopilot/firewall, metrics collector,
+// and the embedded REST API/dashboard, all wired together with graceful
+// shutdown on SIGINT/SIGTERM (see serve.go).
+//
+// `vanguard simulate <scenario>` runs a safe, synthetic attack scenario
+// against the same database for demos and testing, independent of the
+// full daemon (see simulator package).
 package main
 
 import (
@@ -24,6 +28,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "serve":
+		runServeCmd(os.Args[2:])
 	case "simulate":
 		runSimulateCmd(os.Args[2:])
 	case "help", "-h", "--help":
@@ -39,13 +45,34 @@ func printUsage() {
 	fmt.Println(`VANGUARD - Lightweight AI-Assisted Linux IDS/IPS
 
 Usage:
+  vanguard serve [flags]                 Run the full monitoring daemon + REST API/dashboard
   vanguard simulate <scenario> [flags]   Run a safe, synthetic attack simulation
   vanguard help                          Show this message
 
+Serve flags:
+  -db string                 Path to the SQLite database file (default "vanguard.db")
+  -http-addr string          Address the REST API + dashboard listen on (default ":8080")
+  -auth-log string           Path to the SSH/system auth log to tail (default "/var/log/auth.log", "" to disable)
+  -web-log string            Comma-separated Nginx/Apache access log paths to tail (default: none)
+  -honeypot                  Enable the decoy honeypot listeners on 2222/33060/8081 (default true)
+  -ufw                       Enforce bans with the real ufw CLI (requires root/Linux); default uses
+                              an in-memory mock executor safe for sandboxes/dev
+  -ufw-sudo                  Prepend sudo to every ufw command (only with -ufw)
+  -admin-ip string           Comma-separated fail-safe admin IPs Autopilot can NEVER ban
+  -jwt-secret string         HMAC secret for dashboard session JWTs (env VANGUARD_JWT_SECRET; a random
+                              ephemeral secret is generated with a warning if neither is set)
+  -jwt-ttl duration          Dashboard session token lifetime (default 24h)
+  -metrics-interval duration How often to sample system resource metrics (default 30s)
+  -metrics-retention duration How long to keep historical metric samples (default 168h)
+  -disk-path string          Filesystem path to report disk usage for (default "/")
+  -state-max-idle duration   How long idle per-IP detection state is kept before reaping (default 30m)
+  -reap-interval duration    How often the Autopilot maintenance loop runs (default 1m)
+  -shutdown-timeout duration Max time to let in-flight requests/tasks finish on shutdown (default 15s)
+
 Simulate scenarios:
   ssh-bruteforce   Simulate a brute-force SSH login attack (implemented)
-  honeypot         Simulate a honeypot trigger (coming soon)
-  port-scan        Simulate a port scan (coming soon)
+  honeypot         Simulate a honeypot trigger (implemented)
+  port-scan        Simulate a port scan (implemented)
 
 Simulate flags:
   -db string        Path to the SQLite database file (default "vanguard.db")

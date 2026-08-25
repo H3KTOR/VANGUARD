@@ -22,6 +22,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -72,6 +73,11 @@ type Server struct {
 	// indefinitely (keeping with the "0 idle RAM / minimal footprint"
 	// design goal).
 	readTimeout time.Duration
+	// wg tracks every accept-loop and in-flight connection-handler
+	// goroutine so Wait() can block until all of them have fully returned
+	// after ctx is cancelled -- this lets the caller safely close the
+	// database only once no honeypot goroutine can still write to it.
+	wg sync.WaitGroup
 }
 
 // NewServer constructs a honeypot Server. handler is called once per
@@ -93,11 +99,22 @@ func NewServer(decoys []Decoy, handler HitHandler) *Server {
 // defenses from starting.
 func (s *Server) Start(ctx context.Context) {
 	for _, d := range s.decoys {
+		s.wg.Add(1)
 		go s.serveDecoy(ctx, d)
 	}
 }
 
+// Wait blocks until every decoy's accept loop and every in-flight
+// connection handler goroutine has returned. Callers should cancel the
+// context passed to Start and then call Wait before closing the database,
+// so no honeypot goroutine can attempt a write after the DB handle is gone.
+func (s *Server) Wait() {
+	s.wg.Wait()
+}
+
 func (s *Server) serveDecoy(ctx context.Context, d Decoy) {
+	defer s.wg.Done()
+
 	lc := net.ListenConfig{}
 	ln, err := lc.Listen(ctx, "tcp", fmt.Sprintf(":%d", d.Port))
 	if err != nil {
@@ -122,11 +139,13 @@ func (s *Server) serveDecoy(ctx context.Context, d Decoy) {
 				continue
 			}
 		}
+		s.wg.Add(1)
 		go s.handleConn(conn, d)
 	}
 }
 
 func (s *Server) handleConn(conn net.Conn, d Decoy) {
+	defer s.wg.Done()
 	defer conn.Close()
 
 	remoteHost, _, err := net.SplitHostPort(conn.RemoteAddr().String())
