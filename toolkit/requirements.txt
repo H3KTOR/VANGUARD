@@ -1,0 +1,19 @@
+# VANGUARD v3.0 Python Toolkit dependencies.
+#
+# This toolkit is a read-mostly companion to the Go core: it NEVER executes
+# shell commands and only ever touches the shared SQLite database file
+# directly (via sqlite3, read-only where possible) or well-known HTTP APIs
+# (LLM providers, OSINT feeds). See database.py's module docstring for the
+# concurrency/WAL-safety rationale.
+
+typer[all]>=0.12,<1.0        # CLI framework (analyze / sync / report subcommands)
+rich>=13.7                   # Pretty terminal tables/panels used by main.py
+requests>=2.31               # HTTP client for OSINT feed + LLM REST calls
+reportlab>=4.0                # PDF generation for pdf_reporter.py
+python-dateutil>=2.8          # Robust ISO-8601 parsing of Go's RFC3339 timestamps
+
+# LLM SDKs -- both are optional at runtime (ai_analyst.py auto-detects
+# whichever one is installed and whichever API key is set), but at least
+# one must be installed for `vanguard-toolkit analyze` to function.
+openai>=1.30
+anthropic>=0.28

@@ -51,4 +51,17 @@ toolkit/*.pyc
 toolkit/.venv/
 toolkit/venv/
 toolkit/*.egg-info/
+toolkit/*.pdf
+
+# --- VANGUARD (React frontend) ---
+# core/frontend/node_modules and the frontend's own build output are
+# covered by the generic node_modules/ and dist/ rules above. The
+# Go-embed target directory (core/cmd/vanguard/dist) is likewise a
+# `dist/` match and normally ignored -- EXCEPT for a checked-in
+# `.gitkeep` placeholder, which must survive so `go build ./...` never
+# fails on a fresh checkout before `npm run build` has been run once
+# (see cmd/vanguard/frontend.go's go:embed directive).
+!core/cmd/vanguard/dist/
+core/cmd/vanguard/dist/*
+!core/cmd/vanguard/dist/.gitkeep
 

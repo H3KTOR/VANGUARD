@@ -270,6 +270,15 @@ func (a *app) runMaintenanceTick(ctx context.Context) {
 // can never run on the main goroutine alongside signal handling).
 func (a *app) startHTTPServer() {
 	e := a.echoSrv.NewEcho()
+
+	// Attach the embedded React dashboard (core/frontend's Vite build,
+	// embedded via cmd/vanguard/frontend.go's go:embed) after every
+	// /api/* route is already registered, so its catch-all "/*" route
+	// never shadows an API endpoint.
+	if err := mountFrontend(e); err != nil {
+		log.Printf("[serve] WARNING: failed to mount embedded frontend: %v", err)
+	}
+
 	a.echoHandle = e
 
 	a.wg.Add(1)
