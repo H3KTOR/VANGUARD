@@ -17,3 +17,7 @@ python-dateutil>=2.8          # Robust ISO-8601 parsing of Go's RFC3339 timestam
 # one must be installed for `vanguard-toolkit analyze` to function.
 openai>=1.30
 anthropic>=0.28
+
+# Test suite (tests/) -- mocks every external call (LLM SDKs, requests,
+# SQLite), never hits a real API or database file.
+pytest>=8.0

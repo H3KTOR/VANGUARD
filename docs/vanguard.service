@@ -1,0 +1,99 @@
+# /etc/systemd/system/vanguard.service
+#
+# Production systemd unit for VANGUARD v3.0 (`vanguard serve`).
+#
+# Assumptions (see docs/install.md for the full setup this unit depends on):
+#   - A dedicated, unprivileged `vanguard` system user/group owns
+#     /opt/vanguard (binary + SQLite DB) and can run `sudo ufw` via a
+#     narrowly-scoped /etc/sudoers.d/vanguard rule (see install.md).
+#   - The Go binary is installed at /usr/local/bin/vanguard (built with
+#     the React dashboard already embedded via `make build`).
+#   - Runtime secrets (VANGUARD_JWT_SECRET, optional VANGUARD_ADMIN_IPS)
+#     live in /etc/vanguard/vanguard.env, mode 0600, owned by vanguard:vanguard
+#     -- never hardcoded in this unit file, which is often world-readable.
+#   - The honeypot listeners (2222/33060/8081) and real auth.log tailing
+#     need CAP_NET_BIND_SERVICE-equivalent/log-read access; this unit
+#     grants the minimum Linux capabilities needed instead of running as
+#     root outright (see AmbientCapabilities below).
+#
+# Install / enable:
+#   sudo cp docs/vanguard.service /etc/systemd/system/vanguard.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now vanguard
+#   sudo systemctl status vanguard
+#   sudo journalctl -u vanguard -f
+
+[Unit]
+Description=VANGUARD v3.0 - Lightweight AI-Assisted Linux IDS/IPS
+Documentation=https://github.com/your-org/vanguard
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=vanguard
+Group=vanguard
+WorkingDirectory=/opt/vanguard
+
+# Secrets (VANGUARD_JWT_SECRET, optionally VANGUARD_ADMIN_IPS) are loaded
+# from this file rather than embedded here -- EnvironmentFile keys become
+# real env vars serve_config.go already knows how to read.
+EnvironmentFile=/etc/vanguard/vanguard.env
+
+# Explicit, visible-in-ps flags for everything that ISN'T a secret. Adjust
+# paths/log sources per host. -auth-log "" disables SSH log tailing if this
+# host doesn't run sshd; add -web-log for Nginx/Apache access log paths.
+ExecStart=/usr/local/bin/vanguard serve \
+    -db /opt/vanguard/data/vanguard.db \
+    -http-addr :8080 \
+    -auth-log /var/log/auth.log \
+    -honeypot=true \
+    -ufw \
+    -ufw-sudo \
+    -metrics-interval 30s \
+    -metrics-retention 168h \
+    -disk-path / \
+    -shutdown-timeout 15s
+
+# Graceful shutdown: cmd/vanguard/serve.go already handles SIGTERM by
+# draining in-flight requests within -shutdown-timeout before exiting, so
+# give systemd a slightly longer stop timeout than that flag's value.
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+
+# --- Security hardening -----------------------------------------------
+# The daemon needs to: read /var/log/auth.log (adm group is simplest),
+# bind low-ish honeypot ports (2222/33060/8081 are all >1024, so no
+# CAP_NET_BIND_SERVICE is actually required at these defaults -- kept
+# here as a documented no-op in case a host is configured to redirect
+# port 22/3306/80 into these via iptables DNAT), and invoke `sudo ufw`.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=false
+# NoNewPrivileges must stay false because `sudo ufw` (ExecStart above)
+# is itself a privilege escalation path this service relies on; the
+# blast radius is instead constrained by the narrow sudoers rule in
+# install.md (vanguard may run ONLY `/usr/sbin/ufw`, nothing else).
+
+ProtectSystem=strict
+ReadWritePaths=/opt/vanguard/data
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+
+# Resource ceiling -- VANGUARD is documented as a low-footprint (~25MB
+# binary, modest RSS) daemon; a generous but bounded cap catches runaway
+# behavior without needing manual tuning per host.
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

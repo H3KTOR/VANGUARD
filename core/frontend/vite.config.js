@@ -15,6 +15,24 @@ export default defineConfig({
     outDir: '../cmd/vanguard/dist',
     emptyOutDir: true,
     sourcemap: false,
+    // Manual chunking splits the single ~630KB bundle into cacheable,
+    // independently-invalidated vendor chunks: react/react-dom rarely
+    // change version-to-version, recharts (the largest single dep) is
+    // only needed by the chart-heavy Command Center/Metrics pages, and
+    // lucide-react icons churn independently of both. Splitting these
+    // out means a change to our own app code no longer busts the cache
+    // for React/Recharts/Lucide on every deploy, and the initial parse
+    // cost for any one chunk drops well under the 500KB warning limit.
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom'],
+          'vendor-charts': ['recharts'],
+          'vendor-icons': ['lucide-react'],
+        },
+      },
+    },
   },
   server: {
     // Local `npm run dev` proxies API calls straight to the Go daemon so
@@ -26,5 +44,11 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.js'],
+    css: true,
   },
 })
