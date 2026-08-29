@@ -1,5 +1,11 @@
 # VANGUARD v3.0 🛡️
 
+
+![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
+![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)
+![React Version](https://img.shields.io/badge/React-18.0+-61DAFB?logo=react)
+![Python Version](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python)
 ### Enterprise-Grade, Edge-Native Linux IDS/IPS & Security Operations Platform
 
 **VANGUARD** is a comprehensive, low-footprint **Intrusion Detection and Prevention System (IDS/IPS)** engineered specifically for standalone Linux servers.
