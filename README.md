@@ -1,191 +1,595 @@
 # VANGUARD v3.0 🛡️
 
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)
-![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)
-![React Version](https://img.shields.io/badge/React-18.0+-61DAFB?logo=react)
-![Python Version](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python)
+### Enterprise-Grade, Edge-Native Linux IDS/IPS & Security Operations Platform
 
-**Enterprise-Grade, Edge-Native Linux IDS/IPS & Security Operations Platform**
+**VANGUARD** is a comprehensive, low-footprint **Intrusion Detection and Prevention System (IDS/IPS)** engineered specifically for standalone Linux servers.
 
-VANGUARD is a comprehensive, low-footprint Intrusion Detection and Prevention System (IDS/IPS) engineered specifically for standalone Linux servers. It merges deterministic attack detection, automated firewall mitigation, and an embedded React dashboard into a single **~25MB zero-dependency static binary**.
+It combines:
 
-Coupled with an ephemeral Python toolkit for AI-driven forensics and OSINT synchronization, VANGUARD delivers a complete Security Operations Center (SOC) experience that operates entirely on the edge, without requiring external cloud databases or third-party web servers.
+- Deterministic attack detection
+- Dynamic risk scoring
+- Automated firewall mitigation
+- Embedded React security dashboard
+- AI-powered forensic analysis
+- OSINT threat intelligence synchronization
 
----
+All within a single **~25 MB zero-dependency static binary**.
 
-## 🧠 Design Philosophy & Architecture
-
-VANGUARD is built on three core principles: **Zero External Dependencies, Fail-Safe Mitigation, and Strict Separation of Concerns.**
-
-### The Polyglot Stack
-1. **The Core Daemon (Go):** 
-   A high-performance, concurrent engine that handles log tailing (`auth.log`, Nginx/Apache), dynamic risk scoring, and OS-level firewall execution (`ufw`/`iptables`). It embeds a lightweight Echo REST API and serves the compiled React dashboard directly from memory using `//go:embed`.
-2. **The Data Layer (SQLite in WAL Mode):** 
-   Uses the pure-Go `glebarez/sqlite` driver (CGO-free). The database is strictly configured with `PRAGMA journal_mode=WAL` and `busy_timeout` to ensure the always-on Go daemon never blocks the ephemeral Python toolkit from reading data.
-3. **The Embedded SOC (React + Vite):** 
-   A responsive, client-side dashboard featuring modular architecture, custom polling hooks for live data, and `manualChunks` code-splitting for sub-second load times.
-4. **The Ephemeral Toolkit (Python 3):** 
-   A cron-triggered CLI tool utilizing Typer. It consumes 0 RAM when idle. It strictly connects to SQLite in `mode=ro` (Read-Only) for AI analysis and reporting, ensuring it can never corrupt the Go daemon's WAL state.
+VANGUARD delivers a complete **Security Operations Center (SOC)** experience that runs entirely on the edge, without requiring external cloud databases or third-party web servers.
 
 ---
 
-## ✨ Core Capabilities
+# 🧠 Design Philosophy & Architecture
 
-### 🔍 Deterministic Detection & Risk Scoring
-VANGUARD shuns noisy heuristic ML models in favor of a deterministic rule engine with sliding-window state management (lazy pruning).
-* **SSH Brute Force & Escalation:** Detects high-frequency failures and flags `CRITICAL` escalation if a successful login immediately follows a brute-force sequence.
-* **Web Threat Detection:** Identifies Directory Scanning, Path Traversal (`../../`), SQLi/XSS probing, and HTTP Floods.
-* **Deception Layer (Honeypot):** Built-in decoy listeners (e.g., fake SSH on port 2222, fake MySQL). Any TCP connection to a decoy instantly triggers a zero-threshold `CRITICAL` response.
+VANGUARD is built around three core principles:
 
-### 🛡️ Autopilot & Action Engine
-Converts detection events into immediate OS-level firewall rules while prioritizing operator safety.
-* **Fail-Safe Whitelisting:** A hardcoded `AdminWhitelistIPs` configuration guarantees that the Autopilot will *never* lock out system administrators, regardless of risk scores.
-* **TTL Ban Reaper:** Automated block lifecycle management. Bans expire naturally and are reaped by a background goroutine.
-* **Panic Mode (System Lockdown):** A site-wide emergency kill-switch. It defaults to a **Mandatory Dry-Run Preview** (showing exactly which connections will drop) and requires explicit two-step confirmation. Includes an automatic 30-minute rollback to prevent permanent self-lockout.
+> **Zero External Dependencies · Fail-Safe Mitigation · Strict Separation of Concerns**
 
-### 🤖 AI Forensics & OSINT Synchronization
-* **LLM Analyst:** Integrates securely with Anthropic (Claude) and OpenAI. Generates structured JSON verdicts detailing *Likely Intent*, *Threat Actor Sophistication*, and *MITRE ATT&CK* mappings. Features graceful degradation on API failures.
-* **OSINT Threat Feed:** Synchronizes with public blocklists (e.g., `ipsum`), filtering out internal/loopback IPs automatically before staging bulk firewall bans in a single short-lived transaction.
+## The Polyglot Stack
+
+### 🐹 Core Daemon — Go
+
+A high-performance concurrent engine responsible for:
+
+- Log tailing (`auth.log`, Nginx, Apache)
+- Dynamic risk scoring
+- Deterministic threat detection
+- OS-level firewall execution (`ufw` / `iptables`)
+- REST API powered by Echo
+- Embedded frontend serving via `//go:embed`
+
+The compiled React dashboard is served directly from the Go binary.
 
 ---
 
-## 🛠️ Installation & Deployment
+### 🗄️ Data Layer — SQLite
 
-VANGUARD is designed to be deployed as a `systemd` service running under a dedicated, unprivileged Linux user.
+VANGUARD uses SQLite in **WAL (Write-Ahead Logging) mode** with the pure-Go `glebarez/sqlite` driver.
 
-### 1. Build from Source
-```bash
-# Clone the repository
-git clone [https://github.com/YOUR_USERNAME/VANGUARD.git](https://github.com/YOUR_USERNAME/VANGUARD.git)
-cd VANGUARD
+Key configuration:
 
-# Build the React frontend AND embed it into the compiled Go binary
-make build
-
+```sql
+PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=5000;
 ```
 
-### 2. Production Setup (systemd)
+This allows the always-on Go daemon and the ephemeral Python toolkit to access the database safely without blocking each other.
 
-Move the binary to your executable path and configure the environment:
+The Python toolkit connects using:
+
+```text
+mode=ro
+```
+
+ensuring that it can only read data and cannot modify or corrupt the daemon's database state.
+
+---
+
+### ⚛️ Embedded SOC — React + Vite
+
+A responsive client-side security dashboard featuring:
+
+- Modular React architecture
+- Live polling hooks
+- Real-time telemetry
+- Threat visualization
+- ManualChunks code splitting
+- Sub-second dashboard loading
+
+The compiled frontend is embedded directly into the Go binary.
+
+---
+
+### 🐍 Ephemeral Toolkit — Python 3
+
+A lightweight cron-triggered CLI toolkit built with **Typer**.
+
+It is designed to remain completely inactive when not executing a scheduled task.
+
+The toolkit:
+
+- Performs AI-assisted forensic analysis
+- Synchronizes OSINT threat intelligence
+- Generates security reports
+- Reads SQLite in **read-only mode**
+- Never modifies the Go daemon's database
+
+---
+
+# ✨ Core Capabilities
+
+## 🔍 Deterministic Detection & Risk Scoring
+
+Instead of relying on noisy heuristic ML models for primary detection, VANGUARD uses a deterministic rule engine with **sliding-window state management** and lazy pruning.
+
+### 🔐 SSH Brute Force & Escalation
+
+Detects high-frequency authentication failures and identifies suspicious successful logins immediately following brute-force activity.
+
+### 🌐 Web Threat Detection
+
+Detects common web-based attack patterns, including:
+
+- Directory scanning
+- Path traversal (`../../`)
+- SQL Injection probing
+- XSS probing
+- HTTP flooding
+
+### 🍯 Deception Layer — Honeypot
+
+Built-in decoy listeners can expose fake services such as:
+
+- Fake SSH — `2222`
+- Fake MySQL
+- Other configurable decoy services
+
+Any TCP connection to a decoy service immediately triggers a **CRITICAL** security event.
+
+---
+
+# 🛡️ Autopilot & Action Engine
+
+VANGUARD converts detection events into immediate OS-level firewall actions while prioritizing operator safety.
+
+### 🟢 Fail-Safe Whitelisting
+
+A hardcoded:
+
+```text
+AdminWhitelistIPs
+```
+
+configuration ensures that Autopilot will never lock out trusted system administrators regardless of the calculated risk score.
+
+### ⏱️ TTL Ban Reaper
+
+Automated firewall-ban lifecycle management.
+
+Bans automatically expire and are reaped by a background goroutine.
+
+### 🚨 Panic Mode — System Lockdown
+
+A site-wide emergency firewall kill-switch.
+
+Panic Mode includes:
+
+1. Mandatory dry-run preview
+2. Exact preview of connections that will be dropped
+3. Explicit two-step confirmation
+4. Automatic 30-minute rollback
+
+The automatic rollback is designed to prevent permanent self-lockout.
+
+---
+
+# 🤖 AI Forensics & OSINT Synchronization
+
+## 🧠 LLM Analyst
+
+VANGUARD integrates with:
+
+- Anthropic Claude
+- OpenAI
+
+The LLM analyst produces structured JSON verdicts containing information such as:
+
+```json
+{
+  "likely_intent": "...",
+  "threat_actor_sophistication": "...",
+  "mitre_attack_mapping": []
+}
+```
+
+The system also provides graceful degradation when an external AI API is unavailable.
+
+---
+
+## 🌐 OSINT Threat Feed
+
+VANGUARD synchronizes with public threat intelligence blocklists, including sources such as **ipsum**.
+
+The synchronization layer automatically:
+
+- Filters internal IP addresses
+- Filters loopback addresses
+- Stages malicious IPs
+- Performs bulk firewall bans
+- Uses a short-lived database transaction
+
+---
+
+# 🛠️ Installation & Deployment
+
+VANGUARD is designed to run as a **systemd service** under a dedicated unprivileged Linux user.
+
+## 1. Build from Source
+
+### Clone the repository
+
+```bash
+git clone https://github.com/H3KTOR/VANGUARD.git
+cd VANGUARD
+```
+
+### Build the frontend and embed it into the Go binary
+
+```bash
+make build
+```
+
+---
+
+# 2. Production Setup — systemd
+
+### Install the binary
 
 ```bash
 sudo cp core/vanguard /usr/local/bin/
-sudo useradd -r -s /bin/false vanguard
-sudo mkdir -p /var/lib/vanguard && sudo chown vanguard:vanguard /var/lib/vanguard
-
-# Create the secure environment file
-sudo nano /etc/vanguard.env
-# Add: VANGUARD_JWT_SECRET=your_super_secure_random_string
-
 ```
 
-Install the provided `systemd` service:
+### Create a dedicated system user
+
+```bash
+sudo useradd -r -s /bin/false vanguard
+```
+
+### Create the application data directory
+
+```bash
+sudo mkdir -p /var/lib/vanguard
+sudo chown vanguard:vanguard /var/lib/vanguard
+```
+
+### Create the secure environment file
+
+```bash
+sudo nano /etc/vanguard.env
+```
+
+Add your JWT secret:
+
+```env
+VANGUARD_JWT_SECRET=your_super_secure_random_string
+```
+
+### Install the systemd service
 
 ```bash
 sudo cp docs/vanguard.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now vanguard
-
 ```
 
-### 3. Toolkit Setup (Cron)
+### Reload systemd
+
+```bash
+sudo systemctl daemon-reload
+```
+
+### Enable and start VANGUARD
+
+```bash
+sudo systemctl enable --now vanguard
+```
+
+### Check service status
+
+```bash
+sudo systemctl status vanguard
+```
+
+---
+
+# 3. Python Toolkit Setup
+
+Navigate to the toolkit directory:
 
 ```bash
 cd /opt/vanguard-toolkit
+```
+
+Install dependencies:
+
+```bash
 pip3 install -r requirements.txt
+```
 
-# Add to crontab (crontab -e)
-# Run OSINT sync nightly at 2 AM
+### Configure Cron
+
+Open the crontab:
+
+```bash
+crontab -e
+```
+
+Run the OSINT synchronization every night at **02:00**:
+
+```cron
 0 2 * * * cd /opt/vanguard-toolkit && python3 main.py sync >> /var/log/vanguard-sync.log 2>&1
-
 ```
 
 ---
 
-## 💻 Development & Attack Simulation
+# 💻 Development & Attack Simulation
 
-VANGUARD ships with a built-in `simulator` package to generate realistic synthetic incidents and bans safely without touching the host OS firewall.
+VANGUARD includes a built-in simulator capable of generating realistic synthetic incidents and bans **without modifying the host OS firewall**.
+
+## Start the daemon in development mode
 
 ```bash
-# Start the daemon in development mode
 ./core/vanguard serve -db vanguard-dev.db -honeypot=false
-
-# In another terminal, simulate a targeted SSH brute-force attack
-./core/vanguard simulate ssh-bruteforce -db vanguard-dev.db -ip 198.51.100.23 -attempts 45
-
-# Trigger the decoy honeypot
-./core/vanguard simulate honeypot -db vanguard-dev.db
-
 ```
 
-For frontend development, VANGUARD proxies API requests to the Go backend, supporting Vite's Hot Module Replacement (HMR):
+---
+
+## Simulate an SSH Brute-Force Attack
+
+In another terminal:
+
+```bash
+./core/vanguard simulate ssh-bruteforce \
+  -db vanguard-dev.db \
+  -ip 198.51.100.23 \
+  -attempts 45
+```
+
+The simulator generates a realistic SSH brute-force sequence against the selected test IP.
+
+---
+
+## Trigger the Honeypot
+
+```bash
+./core/vanguard simulate honeypot \
+  -db vanguard-dev.db
+```
+
+---
+
+# 🎨 Frontend Development
+
+VANGUARD proxies API requests to the Go backend while supporting **Vite Hot Module Replacement (HMR)**.
+
+Navigate to the frontend:
 
 ```bash
 cd core/frontend
+```
+
+Install dependencies:
+
+```bash
 npm install
+```
+
+Start the development server:
+
+```bash
 npm run dev
-
 ```
 
 ---
 
-## 🧪 Testing & QA
+# 🧪 Testing & QA
 
-VANGUARD maintains strict quality assurance across all three languages. Run the test suites locally:
+VANGUARD maintains automated quality assurance across all three components.
 
-* **Go Core (Unit & Integration):**
+## 🐹 Go Core — Unit & Integration Tests
+
 ```bash
-cd core && go test ./...
-
+cd core
+go test ./...
 ```
-
-
-* **React Dashboard (Vitest + React Testing Library):**
-Includes robust mocks for `vanguardClient.js` and `ResizeObserver`.
-```bash
-cd core/frontend && npx vitest run
-# 20/20 tests passing
-
-```
-
-
-* **Python Toolkit (Pytest):**
-Full mock coverage using `unittest.mock` and `responses` to ensure zero real network/DB calls during CI/CD.
-```bash
-cd toolkit && pytest -q
-# 55/55 tests passing
-
-```
-
-
 
 ---
 
-## 📂 Codebase Structure
+## ⚛️ React Dashboard — Vitest
+
+The frontend test suite uses:
+
+- Vitest
+- React Testing Library
+- Mocked `vanguardClient.js`
+- `ResizeObserver` mocks
+
+Run the tests:
+
+```bash
+cd core/frontend
+npx vitest run
+```
+
+**Current result:**
+
+```text
+20/20 tests passing
+```
+
+---
+
+## 🐍 Python Toolkit — Pytest
+
+The Python toolkit includes extensive mocking using:
+
+- `unittest.mock`
+- `responses`
+
+This ensures CI/CD tests perform **zero real network or database operations**.
+
+Run the tests:
+
+```bash
+cd toolkit
+pytest -q
+```
+
+**Current result:**
+
+```text
+55/55 tests passing
+```
+
+---
+
+# 📂 Codebase Structure
 
 ```text
 VANGUARD/
+│
 ├── core/
-│   ├── cmd/vanguard/        # Daemon entry point & embedded FS routing (`mountFrontend`)
-│   ├── frontend/            # React SPA (Vite, Tailwind, Recharts, Lucide)
+│   ├── cmd/
+│   │   └── vanguard/
+│   │       └── # Daemon entry point & embedded FS routing
+│   │
+│   ├── frontend/
+│   │   └── # React SPA
+│   │      ├── Vite
+│   │      ├── Tailwind
+│   │      ├── Recharts
+│   │      └── Lucide
+│   │
 │   └── internal/
-│       ├── api/             # Echo REST API & JWT Auth Middleware
-│       ├── database/        # SQLite GORM Models & WAL Configuration
-│       ├── detection/       # Rule Engine, Log Tailers, Sliding-Window State
-│       ├── firewall/        # UFW/iptables Execution, Autopilot, Panic Mode
-│       └── simulator/       # Synthetic Attack Generator
-├── toolkit/                 # Python CLI (AI Analyst, OSINT Sync, PDF Reports)
-└── docs/                    # Architecture diagrams & systemd configurations
-
+│       ├── api/
+│       │   └── # Echo REST API & JWT authentication
+│       │
+│       ├── database/
+│       │   └── # SQLite GORM models & WAL configuration
+│       │
+│       ├── detection/
+│       │   └── # Rule engine, log tailers & sliding-window state
+│       │
+│       ├── firewall/
+│       │   └── # UFW/iptables, Autopilot & Panic Mode
+│       │
+│       └── simulator/
+│           └── # Synthetic attack generator
+│
+├── toolkit/
+│   └── # Python CLI
+│      ├── AI Analyst
+│      ├── OSINT Sync
+│      └── PDF Reports
+│
+└── docs/
+    └── # Architecture diagrams & systemd configurations
 ```
 
 ---
 
-*Architected and developed by [Masoud Hosseinpour](https://www.google.com/search?q=https://github.com/H3KTOR).*
+# 🏗️ Architecture Overview
 
+```text
+                         ┌──────────────────────────┐
+                         │      Linux Server        │
+                         │                          │
+                         │   ┌──────────────────┐   │
+                         │   │  VANGUARD Core   │   │
+                         │   │      (Go)        │   │
+                         │   └────────┬─────────┘   │
+                         │            │             │
+                         │     ┌──────▼──────┐      │
+                         │     │   SQLite    │      │
+                         │     │    (WAL)    │      │
+                         │     └──────┬──────┘      │
+                         │            │             │
+                         │     ┌──────▼──────┐      │
+                         │     │ Python      │      │
+                         │     │ Toolkit     │      │
+                         │     └──────┬──────┘      │
+                         │            │             │
+                         └────────────┼─────────────┘
+                                      │
+                          ┌───────────┴───────────┐
+                          │                       │
+                    ┌─────▼─────┐           ┌─────▼─────┐
+                    │    AI     │           │   OSINT   │
+                    │  Analyst  │           │   Feeds   │
+                    └───────────┘           └───────────┘
 ```
 
-این نسخه به شدت تکنیکال، ساختاریافته و چشم‌گیر است. تمام کلماتی که برای یک مهندس DevOps یا مدیر فنی جذاب است (مثل WAL Mode, Lazy Pruning, Air-gapped, HMR, Mock Coverage) در آن با دقت و در جای مناسب گنجانده شده است. کپی کن و در ریپازیتوری خودت قرار بده!
+---
 
+# 📊 Project Highlights
+
+| Component | Technology |
+|---|---|
+| Core Engine | Go |
+| REST API | Echo |
+| Database | SQLite |
+| Database Driver | glebarez/sqlite |
+| Frontend | React |
+| Build Tool | Vite |
+| Styling | Tailwind CSS |
+| Charts | Recharts |
+| Icons | Lucide |
+| AI Analysis | Anthropic / OpenAI |
+| Toolkit | Python 3 + Typer |
+| Service Manager | systemd |
+| Firewall | UFW / iptables |
+| Detection | Deterministic Rule Engine |
+| Database Mode | WAL |
+| Deployment | Static Linux Binary |
+
+---
+
+# 🔐 Security Model
+
+VANGUARD follows a defense-in-depth approach:
+
+```text
+                 ┌─────────────────────┐
+                 │   Incoming Traffic  │
+                 └──────────┬──────────┘
+                            │
+                 ┌──────────▼──────────┐
+                 │  Log / Event Input  │
+                 └──────────┬──────────┘
+                            │
+                 ┌──────────▼──────────┐
+                 │ Deterministic Rules │
+                 └──────────┬──────────┘
+                            │
+                 ┌──────────▼──────────┐
+                 │    Risk Scoring     │
+                 └──────────┬──────────┘
+                            │
+              ┌─────────────┴─────────────┐
+              │                           │
+        ┌─────▼─────┐               ┌─────▼─────┐
+        │  Monitor  │               │  Autopilot │
+        └───────────┘               └─────┬─────┘
+                                          │
+                                   ┌──────▼──────┐
+                                   │ Firewall    │
+                                   │ Mitigation  │
+                                   └─────────────┘
 ```
+
+---
+
+# 🚀 Project Status
+
+**VANGUARD v3.0** is an actively developed security platform combining deterministic detection, automated mitigation, AI-assisted investigation, and an embedded SOC dashboard into a single edge-native architecture.
+
+---
+
+## 👨‍💻 Author
+
+**Architected and developed by Masoud Hosseinpour.**
+
+---
+
+## ⭐ Support the Project
+
+If VANGUARD is useful or interesting to you, consider giving the repository a ⭐ on GitHub.
+
+```text
+⭐ Star the repository
+🍴 Fork the project
+🐛 Report issues
+💡 Suggest improvements
+```
+
+---
+
+**VANGUARD v3.0 — Security at the Edge.**
