@@ -1,5 +1,3 @@
-این متن readme.md گیتهابم رو مرتب کن و دستورات راحتتر قابل کپی بشن
-
 VANGUARD v3.0 🛡️
 
 Enterprise-Grade, Edge-Native Linux IDS/IPS & Security Operations Platform
