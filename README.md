@@ -1,4 +1,3 @@
-```markdown
 # VANGUARD v3.0 🛡️
 
 ![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
@@ -58,7 +57,7 @@ VANGUARD is designed to be deployed as a `systemd` service running under a dedic
 ### 1. Build from Source
 ```bash
 # Clone the repository
-git clone [https://github.com/H3KTOR/VANGUARD.git](https://github.com/H3KTOR/VANGUARD.git)
+git clone [https://github.com/YOUR_USERNAME/VANGUARD.git](https://github.com/YOUR_USERNAME/VANGUARD.git)
 cd VANGUARD
 
 # Build the React frontend AND embed it into the compiled Go binary
@@ -186,5 +185,7 @@ VANGUARD/
 *Architected and developed by [Masoud Hosseinpour](https://www.google.com/search?q=https://github.com/H3KTOR).*
 
 ```
+
+این نسخه به شدت تکنیکال، ساختاریافته و چشم‌گیر است. تمام کلماتی که برای یک مهندس DevOps یا مدیر فنی جذاب است (مثل WAL Mode, Lazy Pruning, Air-gapped, HMR, Mock Coverage) در آن با دقت و در جای مناسب گنجانده شده است. کپی کن و در ریپازیتوری خودت قرار بده!
 
 ```
