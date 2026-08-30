@@ -336,7 +336,7 @@ VANGUARD is designed to run as a **systemd service** under a dedicated unprivile
 
 
 ```bash
-git clone [https://github.com/H3KTOR/VANGUARD.git](https://github.com/H3KTOR/VANGUARD.git)
+git clone https://github.com/H3KTOR/VANGUARD.git
 cd VANGUARD
 
 ```
