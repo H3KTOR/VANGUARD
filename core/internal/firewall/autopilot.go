@@ -12,6 +12,19 @@ import (
 // DefaultTTL is the ban duration applied when a caller doesn't specify one.
 const DefaultTTL = 1 * time.Hour
 
+// AlertNotifier is the minimal surface Autopilot needs to push a real-time
+// alert (e.g. Telegram) when it bans an IP or toggles Panic Mode. Defined
+// here -- rather than importing internal/notify directly -- so the
+// firewall package stays decoupled from any specific alert channel; the
+// concrete *notify.TelegramNotifier satisfies this interface structurally.
+// A nil AlertNotifier (the zero value) is always safe: every call site
+// nil-checks before calling, exactly like the *notify.TelegramNotifier
+// receiver itself does.
+type AlertNotifier interface {
+	NotifyBan(ctx context.Context, ip, incidentType, severity string, riskScore int, duration time.Duration, reason string)
+	NotifyPanicMode(ctx context.Context, active bool, reason string)
+}
+
 // Autopilot is VANGUARD's automated mitigation layer. It subscribes to the
 // detection Engine (via its Notifier interface) and, for qualifying
 // incidents, issues a TTL ban -- unless the source IP is protected by the
@@ -25,6 +38,7 @@ type Autopilot struct {
 	exec     Executor
 	cfg      Config
 	panicCtl panicController // Panic Mode / lockdown state, see panic_mode.go
+	alert    AlertNotifier   // optional; nil disables push alerts entirely
 }
 
 // Config controls Autopilot behavior.
@@ -85,6 +99,14 @@ func NewAutopilot(db *database.DB, exec Executor, cfg Config) *Autopilot {
 	a := &Autopilot{db: db, exec: exec, cfg: cfg}
 	a.seedAdminWhitelist()
 	return a
+}
+
+// SetAlertNotifier attaches (or detaches, if passed nil) a real-time alert
+// channel. Kept as a separate setter rather than a NewAutopilot parameter
+// so existing call sites (tests, simulator) that construct an Autopilot
+// without any alerting need zero changes.
+func (a *Autopilot) SetAlertNotifier(n AlertNotifier) {
+	a.alert = n
 }
 
 func (a *Autopilot) seedAdminWhitelist() {
@@ -206,6 +228,22 @@ func (a *Autopilot) Ban(ctx context.Context, ip, reason string, duration time.Du
 		}
 	}
 	log.Printf("[autopilot] banned %s for %s (rule #%d, expires %s)", ip, duration, rule.ID, unbanAt.Format(time.RFC3339))
+
+	// Push a real-time alert (e.g. Telegram) on a successful ban. Best-effort
+	// and fully decoupled from the ban's own success: alert delivery never
+	// runs on the request/detection hot path's error path, and a nil/absent
+	// notifier is always a safe no-op (see AlertNotifier doc comment).
+	if a.alert != nil {
+		incType, severity := "manual_block", "N/A"
+		if incidentID != nil {
+			if inc, err := a.db.GetIncident(*incidentID); err == nil {
+				incType, severity = string(inc.Type), string(inc.Severity)
+				a.alert.NotifyBan(ctx, ip, incType, severity, inc.RiskScore, duration, reason)
+				return nil
+			}
+		}
+		a.alert.NotifyBan(ctx, ip, incType, severity, 0, duration, reason)
+	}
 	return nil
 }
 

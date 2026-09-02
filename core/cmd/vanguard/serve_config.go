@@ -42,6 +42,14 @@ type serveConfig struct {
 	ReapInterval time.Duration
 
 	ShutdownTimeout time.Duration
+
+	// TelegramBotToken / TelegramChatID enable real-time push alerts when
+	// Autopilot bans an IP. Both env-var only (never a CLI flag) since
+	// they're secrets that would otherwise be visible via `ps`. Either
+	// being empty disables the notifier entirely (a no-op, not an error --
+	// Telegram alerts are an optional enhancement, not a hard dependency).
+	TelegramBotToken string
+	TelegramChatID   string
 }
 
 // parseServeFlags parses `vanguard serve [flags]`. It never calls os.Exit
@@ -81,6 +89,13 @@ func parseServeFlags(args []string) serveConfig {
 		os.Exit(1)
 	}
 
+	// Telegram alert credentials are intentionally env-var only (no CLI
+	// flag): they're secrets, and flag values leak into `ps aux` output on
+	// a shared/multi-tenant host in a way environment variables (readable
+	// only via /proc/<pid>/environ, root-only by default) do not.
+	telegramBotToken := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
+	telegramChatID := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID"))
+
 	cfg := serveConfig{
 		DBPath:           *dbPath,
 		Verbose:          *verbose,
@@ -99,6 +114,8 @@ func parseServeFlags(args []string) serveConfig {
 		StateMaxIdle:     *stateMaxIdle,
 		ReapInterval:     *reapInterval,
 		ShutdownTimeout:  *shutdownTimeout,
+		TelegramBotToken: telegramBotToken,
+		TelegramChatID:   telegramChatID,
 	}
 
 	if cfg.JWTSecret == "" {

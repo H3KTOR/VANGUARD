@@ -294,6 +294,128 @@ func TestPanicModeAutoRollbackFiresAfterTimeout(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// AlertNotifier wiring (Telegram alerts)
+// ---------------------------------------------------------------------------
+
+// fakeAlertNotifier records every call it receives instead of making a
+// real network call, letting us assert Autopilot's alert-on-ban wiring
+// without depending on the notify package or the real Telegram API.
+type fakeAlertNotifier struct {
+	bans        int
+	lastIP      string
+	lastType    string
+	lastSev     string
+	lastRisk    int
+	panicCalls  int
+	lastActive  bool
+	lastPReason string
+}
+
+func (f *fakeAlertNotifier) NotifyBan(ctx context.Context, ip, incidentType, severity string, riskScore int, duration time.Duration, reason string) {
+	f.bans++
+	f.lastIP = ip
+	f.lastType = incidentType
+	f.lastSev = severity
+	f.lastRisk = riskScore
+}
+
+func (f *fakeAlertNotifier) NotifyPanicMode(ctx context.Context, active bool, reason string) {
+	f.panicCalls++
+	f.lastActive = active
+	f.lastPReason = reason
+}
+
+func TestAutopilotNotifiesOnBan(t *testing.T) {
+	cfg := DefaultConfig()
+	a, db, _ := testAutopilot(t, cfg)
+	notifier := &fakeAlertNotifier{}
+	a.SetAlertNotifier(notifier)
+
+	inc := &database.Incident{
+		Type: database.IncidentSSHBruteForce, SourceIP: "203.0.113.80",
+		RiskScore: 80, Severity: database.SeverityHigh, Status: database.StatusOpen,
+	}
+	if err := db.CreateIncident(inc); err != nil {
+		t.Fatalf("failed to create incident: %v", err)
+	}
+
+	a.OnIncident(inc)
+
+	if notifier.bans != 1 {
+		t.Fatalf("expected exactly 1 NotifyBan call, got %d", notifier.bans)
+	}
+	if notifier.lastIP != "203.0.113.80" {
+		t.Errorf("expected notified IP 203.0.113.80, got %s", notifier.lastIP)
+	}
+	if notifier.lastType != string(database.IncidentSSHBruteForce) {
+		t.Errorf("expected notified type %s, got %s", database.IncidentSSHBruteForce, notifier.lastType)
+	}
+	if notifier.lastRisk != 80 {
+		t.Errorf("expected notified risk score 80, got %d", notifier.lastRisk)
+	}
+}
+
+func TestAutopilotDoesNotNotifyWithoutAttachedNotifier(t *testing.T) {
+	cfg := DefaultConfig()
+	a, db, _ := testAutopilot(t, cfg) // no SetAlertNotifier call
+
+	inc := &database.Incident{
+		Type: database.IncidentSSHBruteForce, SourceIP: "203.0.113.81",
+		RiskScore: 80, Severity: database.SeverityHigh, Status: database.StatusOpen,
+	}
+	if err := db.CreateIncident(inc); err != nil {
+		t.Fatalf("failed to create incident: %v", err)
+	}
+
+	// Must not panic when a.alert is nil.
+	a.OnIncident(inc)
+}
+
+func TestAutopilotDoesNotNotifyWhitelistedOrBelowThreshold(t *testing.T) {
+	cfg := DefaultConfig()
+	a, db, _ := testAutopilot(t, cfg)
+	notifier := &fakeAlertNotifier{}
+	a.SetAlertNotifier(notifier)
+
+	inc := &database.Incident{
+		Type: database.IncidentWebDirScan, SourceIP: "203.0.113.82",
+		RiskScore: 10, Severity: database.SeverityLow, Status: database.StatusOpen,
+	}
+	if err := db.CreateIncident(inc); err != nil {
+		t.Fatalf("failed to create incident: %v", err)
+	}
+
+	a.OnIncident(inc)
+
+	if notifier.bans != 0 {
+		t.Fatalf("expected no NotifyBan call for a below-threshold incident, got %d", notifier.bans)
+	}
+}
+
+func TestPanicModeNotifiesOnEnterAndExit(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PanicModeAutoRollback = time.Hour
+	a, _, _ := testAutopilot(t, cfg)
+	notifier := &fakeAlertNotifier{}
+	a.SetAlertNotifier(notifier)
+	ctx := context.Background()
+
+	if err := a.EnterPanicMode(ctx, "203.0.113.1", "drill", true); err != nil {
+		t.Fatalf("EnterPanicMode failed: %v", err)
+	}
+	if notifier.panicCalls != 1 || !notifier.lastActive {
+		t.Fatalf("expected 1 NotifyPanicMode(active=true) call, got calls=%d active=%v", notifier.panicCalls, notifier.lastActive)
+	}
+
+	if err := a.ExitPanicMode(ctx, "manual exit"); err != nil {
+		t.Fatalf("ExitPanicMode failed: %v", err)
+	}
+	if notifier.panicCalls != 2 || notifier.lastActive {
+		t.Fatalf("expected a second NotifyPanicMode(active=false) call, got calls=%d active=%v", notifier.panicCalls, notifier.lastActive)
+	}
+}
+
 func TestReconcileOnStartupReappliesActiveBans(t *testing.T) {
 	cfg := DefaultConfig()
 	db, err := database.Open(database.Config{Path: ":memory:"})

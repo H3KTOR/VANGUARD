@@ -36,8 +36,15 @@ from rich.text import Text
 
 import ai_analyst
 import database
+import env_loader
 import pdf_reporter
 import threat_sync
+
+# Load ANTHROPIC_API_KEY / OPENAI_API_KEY / TELEGRAM_* / VANGUARD_* from a
+# local .env file (if present) before anything else runs, so ai_analyst's
+# provider auto-detection (which reads os.environ directly) sees them.
+# Real environment variables always take precedence -- see env_loader.py.
+env_loader.load_dotenv()
 
 app = typer.Typer(
     name="vanguard-toolkit",

@@ -26,6 +26,7 @@ import (
 	"vanguard/core/internal/firewall"
 	"vanguard/core/internal/honeypot"
 	"vanguard/core/internal/metrics"
+	"vanguard/core/internal/notify"
 	"vanguard/core/internal/simulator"
 )
 
@@ -94,6 +95,17 @@ func buildApp(cfg serveConfig) (*app, error) {
 	fwCfg := firewall.DefaultConfig()
 	fwCfg.AdminWhitelistIPs = cfg.AdminIPs
 	autopilot := firewall.NewAutopilot(db, executor, fwCfg)
+
+	// --- Telegram alerts (optional). A nil notifier (either env var
+	// unset) makes SetAlertNotifier's callee-side nil-check a total
+	// no-op, so this is always safe to call unconditionally. ---
+	telegram := notify.NewTelegramNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
+	if telegram != nil {
+		autopilot.SetAlertNotifier(telegram)
+		log.Println("[serve] Telegram alerts: ENABLED (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID configured)")
+	} else {
+		log.Println("[serve] Telegram alerts: disabled (set TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID env vars to enable)")
+	}
 
 	// --- 3. Detection Engine, wired to Autopilot as its Notifier so every
 	// newly created Incident is evaluated for an automatic ban in real

@@ -105,6 +105,10 @@ func (a *Autopilot) EnterPanicMode(ctx context.Context, adminIP, reason string, 
 
 	log.Printf("[autopilot] PANIC MODE ENABLED (reason: %q). Keeping %v / ports %v open. Auto-rollback at %s.",
 		reason, keepIPs, a.cfg.EssentialPorts, rollbackAt.Format(time.RFC3339))
+
+	if a.alert != nil {
+		a.alert.NotifyPanicMode(ctx, true, reason)
+	}
 	return nil
 }
 
@@ -127,6 +131,9 @@ func (a *Autopilot) ExitPanicMode(ctx context.Context, reason string) error {
 
 	if wasActive {
 		log.Printf("[autopilot] PANIC MODE DISABLED (%s)", reason)
+		if a.alert != nil {
+			a.alert.NotifyPanicMode(ctx, false, reason)
+		}
 	}
 	return nil
 }
