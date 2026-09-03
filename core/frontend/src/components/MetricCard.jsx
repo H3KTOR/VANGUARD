@@ -40,6 +40,59 @@ export function ProgressMetricCard({ icon: Icon, label, value, unit = '%', sub }
   )
 }
 
+// DaemonFootprintCard renders VANGUARD's OWN resource consumption (as
+// opposed to the host-wide CPU/RAM/DISK tiles above), to make the
+// "single ~25MB binary, near-zero overhead" claim visible as real numbers
+// rather than marketing copy. Shows exact self-RAM in MB (not a %, since
+// there's no natural "capacity" to compare a Go process's heap against)
+// alongside self-CPU% with the same color-graded bar as the host tiles,
+// plus a live goroutine count as a cheap concurrency/load signal.
+export function DaemonFootprintCard({ cpuPercent, allocMB, sysMB, goroutines }) {
+  const pct = Math.max(0, Math.min(100, cpuPercent ?? 0))
+  const color = barColor(pct)
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-card">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <div className="h-8 w-8 rounded-lg bg-indigo-50 flex items-center justify-center">
+            <span className="text-indigo-600 text-sm font-bold">V</span>
+          </div>
+          <span className="text-xs font-semibold text-slate-500">DAEMON FOOTPRINT</span>
+        </div>
+        <span className="text-[10px] font-semibold text-slate-400">self-telemetry</span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="flex items-end gap-1">
+            <span className="text-2xl font-extrabold text-slate-900 tabular-nums">{pct.toFixed(1)}</span>
+            <span className="text-sm font-semibold text-slate-400 mb-0.5">%</span>
+          </div>
+          <p className="text-[11px] text-slate-400">CPU (self)</p>
+          <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden mt-1.5">
+            <div
+              className="h-full rounded-full transition-all duration-500"
+              style={{ width: `${pct}%`, backgroundColor: color }}
+            />
+          </div>
+        </div>
+        <div>
+          <div className="flex items-end gap-1">
+            <span className="text-2xl font-extrabold text-slate-900 tabular-nums">{allocMB ?? 0}</span>
+            <span className="text-sm font-semibold text-slate-400 mb-0.5">MB</span>
+          </div>
+          <p className="text-[11px] text-slate-400">RAM (self, heap)</p>
+          <p className="text-[10px] text-slate-400 mt-1.5">{sysMB ?? 0} MB reserved from OS</p>
+        </div>
+      </div>
+
+      <p className="text-[11px] text-slate-400 mt-3 pt-2 border-t border-slate-100">
+        {goroutines ?? 0} goroutines &middot; proving the single-binary, near-zero-overhead promise
+      </p>
+    </div>
+  )
+}
+
 export function NetworkMetricCard({ icon: Icon, label, value, history = [] }) {
   const chartData = history.length ? history : Array.from({ length: 12 }, (_, i) => ({ i, v: 0 }))
   return (

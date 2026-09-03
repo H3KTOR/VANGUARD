@@ -11,7 +11,7 @@ import {
 } from '../api/vanguardClient.js'
 import RiskGauge from './RiskGauge.jsx'
 import SystemHealthPanel from './SystemHealthPanel.jsx'
-import { ProgressMetricCard, NetworkMetricCard } from './MetricCard.jsx'
+import { ProgressMetricCard, NetworkMetricCard, DaemonFootprintCard } from './MetricCard.jsx'
 import ThreatCounter from './ThreatCounter.jsx'
 import AttackDensityChart from './AttackDensityChart.jsx'
 import ThreatMixChart from './ThreatMixChart.jsx'
@@ -220,7 +220,7 @@ export default function CommandCenter() {
         />
       </div>
 
-      {/* Row 2: 4 resource metric cards */}
+      {/* Row 2: host resource metric cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <ProgressMetricCard icon={Cpu} label="CPU" value={metric?.cpu_percent} sub="Host processor load" />
         <ProgressMetricCard
@@ -231,6 +231,18 @@ export default function CommandCenter() {
         />
         <ProgressMetricCard icon={HardDrive} label="DISK" value={metric?.disk_percent} sub="Root filesystem" />
         <NetworkMetricCard icon={Network} label="NETWORK I/O" value={metric?.active_connections ?? 0} history={networkSpark} />
+      </div>
+
+      {/* Row 2b: VANGUARD's own resource footprint (self-telemetry), kept
+          visually distinct from the host-wide row above so it reads as
+          "how much does VANGUARD itself cost", not another host metric. */}
+      <div className="grid grid-cols-1 gap-4">
+        <DaemonFootprintCard
+          cpuPercent={metric?.self_cpu_percent}
+          allocMB={metric?.self_memory_alloc_mb}
+          sysMB={metric?.self_memory_sys_mb}
+          goroutines={metric?.self_goroutines}
+        />
       </div>
 
       {/* Row 3: 4 threat severity counters */}

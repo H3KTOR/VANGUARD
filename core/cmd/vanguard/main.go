@@ -22,6 +22,12 @@ import (
 )
 
 func main() {
+	// Load a local .env file (if present) before anything else runs, so
+	// TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID (and any other env-var-only
+	// secret) set via .env are visible to parseServeFlags' os.Getenv calls.
+	// Real environment variables always take precedence -- see dotenv.go.
+	loadDotEnvFile()
+
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)

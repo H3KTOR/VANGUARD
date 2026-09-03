@@ -46,6 +46,10 @@ const BASE_METRIC = {
     disk_percent: 33,
     active_connections: 18,
     timestamp: new Date().toISOString(),
+    self_cpu_percent: 1.4,
+    self_memory_alloc_mb: 12,
+    self_memory_sys_mb: 24,
+    self_goroutines: 11,
   },
 }
 
@@ -202,5 +206,34 @@ describe('<CommandCenter />', () => {
     expect(screen.getByText('NETWORK I/O')).toBeInTheDocument()
     // CPU value (42%) renders as a whole-number string somewhere on the card.
     expect(screen.getByText('42')).toBeInTheDocument()
+  })
+
+  it('renders the Daemon Footprint self-telemetry widget from getLatestMetric', async () => {
+    mockApiResponses()
+    render(<CommandCenter />)
+
+    await waitFor(() => expect(screen.getByText('DAEMON FOOTPRINT')).toBeInTheDocument())
+    // self_cpu_percent: 1.4 -> rendered with one decimal place.
+    expect(screen.getByText('1.4')).toBeInTheDocument()
+    // self_memory_alloc_mb: 12
+    expect(screen.getByText('12')).toBeInTheDocument()
+    expect(screen.getByText('24 MB reserved from OS')).toBeInTheDocument()
+    expect(screen.getByText(/11 goroutines/)).toBeInTheDocument()
+  })
+
+  it('renders the Daemon Footprint widget with zeroed defaults before self-telemetry is present', () => {
+    // Older metric rows recorded before Task 2 shipped won't have the
+    // self_* fields at all; the widget must degrade to "0" rather than
+    // crashing on undefined.
+    vanguardClient.getDashboardSummary.mockReturnValue(new Promise(() => {}))
+    vanguardClient.getLatestMetric.mockResolvedValue({
+      metric: { cpu_percent: 10, memory_percent: 10, memory_used_mb: 10, disk_percent: 10, active_connections: 1 },
+    })
+    vanguardClient.getMetricsHistory.mockReturnValue(new Promise(() => {}))
+    vanguardClient.listIncidents.mockReturnValue(new Promise(() => {}))
+
+    render(<CommandCenter />)
+
+    expect(screen.getByText('DAEMON FOOTPRINT')).toBeInTheDocument()
   })
 })

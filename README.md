@@ -19,11 +19,15 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 
 **`core/internal/detection`, `risk`, `thresholds`** — deterministic rule engine (SSH brute force, honeypot triggers, etc.) sharing the `Base Severity + Frequency + Threat Reputation (+ Escalation)` risk-scoring formula.
 
-**`core/internal/firewall`** — UFW/iptables wrapper with an in-memory mock executor (safe for sandboxes/dev) or the real `ufw` CLI, TTL ban reaper (Autopilot maintenance loop), Panic Mode/lockdown preview + enter/exit, fail-safe admin-IP whitelist.
+**`core/internal/firewall`** — UFW/iptables wrapper with an in-memory mock executor (safe for sandboxes/dev) or the real `ufw` CLI, TTL ban reaper (Autopilot maintenance loop), Panic Mode/lockdown preview + enter/exit, fail-safe admin-IP whitelist. Optional real-time push alerts (Telegram) on ban/Panic Mode toggle via the small `AlertNotifier` interface (decoupled from any specific alert channel — see `internal/notify`).
 
 **`core/internal/honeypot`** — decoy listeners (SSH/MySQL/HTTP-like ports) that log any connection as a honeypot-trigger incident.
 
-**`core/internal/metrics`** — periodic CPU/RAM/Disk/Network sampling with configurable retention.
+**`core/internal/metrics`** — periodic CPU/RAM/Disk/Network sampling with configurable retention, plus **daemon self-telemetry**: a `SelfSampler` (gopsutil `process` for CPU%, Go's `runtime.ReadMemStats` for heap RAM) samples VANGUARD's OWN process footprint on every tick, persisted alongside the host-wide reading and surfaced by `/api/metrics/latest` (`self_cpu_percent`, `self_memory_alloc_mb`, `self_memory_sys_mb`, `self_goroutines`) so the dashboard can prove the "single ~25MB binary, near-zero overhead" claim with real numbers.
+
+**`core/internal/notify`** — stdlib-only Telegram Bot API wrapper (`net/http` POST to `sendMessage`, no SDK). Fire-and-forget: a Telegram outage/misconfiguration never blocks or fails the Autopilot ban/Panic Mode action it's attached to. Enabled by setting `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` (env var only, never a CLI flag, to avoid leaking secrets via `ps aux`); either unset makes it a safe no-op.
+
+**`core/cmd/vanguard/dotenv.go` / `toolkit/env_loader.py`** — minimal, dependency-free `.env` file loaders (both languages, same semantics: skip comments/blanks, strip matching quotes, real environment variables always win over `.env` values). A dev convenience only — production should prefer systemd's `EnvironmentFile=` (Go) or a real secrets manager / inherited shell env (Python).
 
 **`core/internal/auth`** — JWT-based session auth (bcrypt password hashing, first-run admin bootstrap).
 
@@ -37,7 +41,7 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 - `vanguard help` — usage.
 
 **`core/frontend`** (Step 4) — React + Vite + Tailwind CSS + Recharts + Lucide React dashboard, built to `core/cmd/vanguard/dist` and embedded into the Go binary via `//go:embed all:dist`:
-- **Command Center** (`/`): Master Threat Posture circular risk gauge (0–100, client-computed from open-incident severity mix + active bans) with quick action buttons; System Health panel (Agent/SQLite/Honeypot/Uptime); CPU/RAM/DISK progress-bar cards + Network I/O sparkline; 4 severity threat counters (Critical/High/Medium/Low) with trend text; Attack Density AreaChart (last 60 minutes); Threat Mix donut chart.
+- **Command Center** (`/`): Master Threat Posture circular risk gauge (0–100, client-computed from open-incident severity mix + active bans) with quick action buttons; System Health panel (Agent/SQLite/Honeypot/Uptime); CPU/RAM/DISK progress-bar cards + Network I/O sparkline; **Daemon Footprint widget** (VANGUARD's own self-telemetry: self-CPU%, self-RAM in MB, goroutine count — piggybacks on the existing 5s `/api/metrics/latest` poll, no extra endpoint/poll cycle needed); 4 severity threat counters (Critical/High/Medium/Low) with trend text; Attack Density AreaChart (last 60 minutes); Threat Mix donut chart.
 - **Incidents**, **Firewall**, **Honeypot**, **Metrics**, **Settings** pages.
 - Login screen with first-run admin bootstrap flow; dark-mode toggle; Panic Mode modal with dry-run preview.
 - `src/api/vanguardClient.js` — typed fetch wrapper for every REST endpoint above, with JWT Bearer auth and centralized 401 handling.
@@ -45,6 +49,7 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 
 **`toolkit/`** (Step 5) — ephemeral Python 3 CLI (0 idle RAM, run via cron or on demand):
 - `database.py` — read-only (`mode=ro`, hard SQLite-enforced, never risks the daemon's WAL file) and read-write (generous `busy_timeout`) connection helpers, typed dataclasses, and query/insert helpers.
+- `env_loader.py` — loads `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` (and anything else) from a local `.env` file (if present) before any other module runs, so `ai_analyst`'s provider auto-detection sees them; real environment variables always take precedence.
 - `ai_analyst.py` — auto-detects `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`, sends recent incidents to the LLM for a structured forensic verdict (JSON schema), with per-incident graceful degradation (a failed/misconfigured call never aborts the whole batch).
 - `threat_sync.py` — fetches the public `ipsum` OSINT malicious-IP feed, filters out private/loopback/reserved ranges and low-corroboration entries, inserts new bans into `firewall_rules`.
 - `pdf_reporter.py` — generates a multi-page SOC PDF (ReportLab platypus) summarizing metrics, severity breakdown, top offending IPs, and recent incidents.
@@ -52,15 +57,15 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
-- No automated test suite for the React frontend or Python toolkit (Go core has `go test ./...` coverage for api/auth/detection/firewall/honeypot/metrics).
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.
-- Main dashboard JS bundle is ~630KB (174KB gzipped) — a single chunk; code-splitting not yet applied.
+- **Attack Correlation Engine** (state-machine chaining Port Scan → Web Error → SSH Fail within a 5-min window into a single `ATTACK_CHAIN` incident with a risk multiplier) — not yet implemented.
+- **Automated Security Test Lab** (`lab/docker-compose.yml` victim/attacker containers + `lab/run-tests.sh` synthetic-attack orchestration) — not yet implemented.
 
 ### Next Steps
 1. Visual QA pass against the original reference design once available.
-2. Add frontend/toolkit test coverage.
-3. Triage npm audit findings; consider `manualChunks` code-splitting if bundle size becomes a concern.
-4. systemd unit file + install docs for running `vanguard serve` as a real host service.
+2. Triage npm audit findings; consider further code-splitting if bundle size becomes a concern.
+3. Attack Correlation Engine (IP-based state machine, MITRE-style chained-incident detection).
+4. Automated Security Test Lab (`lab/` Docker Compose attacker/victim harness).
 
 ## Try It
 
@@ -84,7 +89,21 @@ cd toolkit && pip3 install -r requirements.txt
 python3 main.py report --db ../vanguard.db --output soc_report.pdf
 python3 main.py sync --db ../vanguard.db --dry-run
 ANTHROPIC_API_KEY=sk-... python3 main.py analyze --db ../vanguard.db --limit 10
+# ...or drop a toolkit/.env file (see toolkit/.env.example) so keys don't need
+# to be passed inline every run -- env_loader.py loads it automatically.
 ```
+
+### Configuration (.env)
+Both halves of VANGUARD support an optional local `.env` file as a dev convenience (never overwrites real environment variables, which always win). See `core/.env.example` and `toolkit/.env.example` for the full list. In production, prefer systemd's `EnvironmentFile=` (Go daemon) or a real secrets manager / inherited shell env (Python toolkit) over a checked-out `.env` file.
+
+| Variable | Consumed by | Purpose |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Go daemon (`vanguard serve`) | Bot token for real-time Telegram alerts on Autopilot ban / Panic Mode toggle. Unset = alerts disabled (safe no-op). |
+| `TELEGRAM_CHAT_ID` | Go daemon (`vanguard serve`) | Destination chat ID for the above. Both must be set together to enable alerts. |
+| `VANGUARD_JWT_SECRET` | Go daemon | HMAC secret for signing dashboard session JWTs (falls back to an ephemeral generated secret if unset — sessions won't survive a restart). |
+| `VANGUARD_ADMIN_IPS` | Go daemon | Comma-separated fail-safe admin IPs Autopilot can never ban. |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Python toolkit (`toolkit analyze`) | LLM provider credentials for AI forensic analysis (auto-detected; either enables `analyze`). |
+| `VANGUARD_ANTHROPIC_MODEL` / `VANGUARD_OPENAI_MODEL` | Python toolkit | Optional model overrides for the above. |
 
 ## Data Architecture
 - **Storage**: SQLite (single local file, WAL mode), accessed via GORM (Go) with a pure-Go driver (no CGO), and via Python's built-in `sqlite3` (read-only `mode=ro` URI for the toolkit's analysis/report paths, read-write with a busy timeout for the sync path).
@@ -103,7 +122,7 @@ ANTHROPIC_API_KEY=sk-... python3 main.py analyze --db ../vanguard.db --limit 10
 - **Platform**: Linux host (systemd service recommended); the React dashboard is compiled and embedded into the Go binary at build time — no separate frontend deployment/hosting step.
 - **Status**: ✅ Core daemon + REST API + embedded dashboard + Python toolkit all built and live-tested end-to-end in this sandbox.
 - **Tech Stack**: Go (Echo, GORM/SQLite) + React 18 (Vite, Tailwind CSS, Recharts, Lucide React) + Python 3 (Typer, ReportLab, Anthropic/OpenAI SDKs).
-- **Last Updated**: 2026-08-26
+- **Last Updated**: 2026-09-03
 
 ## Repository Structure
 

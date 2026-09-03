@@ -130,6 +130,18 @@ type SystemMetric struct {
 	DiskPercent       float64   `gorm:"not null" json:"disk_percent"`
 	ActiveConnections int       `gorm:"not null;default:0" json:"active_connections"`
 	Timestamp         time.Time `gorm:"index:idx_metrics_timestamp;not null" json:"timestamp"`
+
+	// --- Self-telemetry: VANGUARD's OWN process footprint, not the host's. ---
+	// Sampled alongside the host-wide fields above on the same tick so the
+	// dashboard can prove the "single ~25MB binary, near-zero overhead"
+	// claim with real numbers instead of marketing copy. CPU comes from a
+	// gopsutil process.Process handle scoped to our own PID; memory comes
+	// from the Go runtime's own accounting (runtime.ReadMemStats), per the
+	// explicit design requirement -- see internal/metrics/self_sampler.go.
+	SelfCPUPercent    float64 `gorm:"not null;default:0" json:"self_cpu_percent"`
+	SelfMemoryAllocMB uint64  `gorm:"not null;default:0" json:"self_memory_alloc_mb"`
+	SelfMemorySysMB   uint64  `gorm:"not null;default:0" json:"self_memory_sys_mb"`
+	SelfGoroutines    int     `gorm:"not null;default:0" json:"self_goroutines"`
 }
 
 // ---------------------------------------------------------------------------

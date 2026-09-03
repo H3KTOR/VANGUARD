@@ -36,8 +36,13 @@ func TestCollectorPersistsSamples(t *testing.T) {
 	}
 	defer db.Close()
 
-	c := NewCollector(db, 20*time.Millisecond, "/", time.Hour)
-	ctx, cancel := context.WithTimeout(context.Background(), 70*time.Millisecond)
+	// NOTE: Sample() itself blocks for ~200ms (cpu.Percent's measurement
+	// window), so the interval/timeout here must comfortably exceed that
+	// on top of the immediate sample, or the single tick can be starved
+	// out entirely on a loaded CI box -- this was intermittently flaky
+	// before this fix (pre-existing, unrelated to self-telemetry).
+	c := NewCollector(db, 50*time.Millisecond, "/", time.Hour)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	c.Run(ctx)
 

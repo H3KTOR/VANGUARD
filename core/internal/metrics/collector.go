@@ -28,6 +28,11 @@ type Collector struct {
 	// are pruned on each tick to keep the SQLite file from growing
 	// unbounded on a long-running host.
 	retention time.Duration
+	// self samples VANGUARD's own process footprint (CPU/RAM/goroutines)
+	// on the same tick as the host-wide reading. Reused across ticks
+	// (never reconstructed) because its CPU% reading is a delta since the
+	// previous call -- see SelfSampler's doc comment.
+	self *SelfSampler
 }
 
 // NewCollector constructs a Collector. interval controls sample frequency
@@ -44,7 +49,7 @@ func NewCollector(db *database.DB, interval time.Duration, diskPath string, rete
 	if retention <= 0 {
 		retention = 7 * 24 * time.Hour
 	}
-	return &Collector{db: db, interval: interval, diskPath: diskPath, retention: retention}
+	return &Collector{db: db, interval: interval, diskPath: diskPath, retention: retention, self: NewSelfSampler()}
 }
 
 // Run samples metrics on a fixed interval until ctx is cancelled. Intended
@@ -73,6 +78,16 @@ func (c *Collector) sampleOnce() {
 		log.Printf("[metrics] failed to sample system metrics: %v", err)
 		return
 	}
+
+	// Overlay VANGUARD's own self-telemetry onto the same row as the
+	// host-wide reading, so the dashboard can fetch both in a single
+	// /api/metrics/latest call without a second endpoint/poll cycle.
+	self := c.self.Sample()
+	sample.SelfCPUPercent = self.CPUPercent
+	sample.SelfMemoryAllocMB = self.AllocMB
+	sample.SelfMemorySysMB = self.SysMB
+	sample.SelfGoroutines = self.Goroutines
+
 	if err := c.db.RecordMetric(sample); err != nil {
 		log.Printf("[metrics] failed to persist sample: %v", err)
 		return
