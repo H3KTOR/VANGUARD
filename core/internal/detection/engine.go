@@ -47,13 +47,15 @@ func (noopNotifier) OnIncident(*database.Incident) {}
 // Engine is safe for concurrent use: multiple tailers (auth.log, web
 // access log, honeypot) can feed it events from separate goroutines.
 type Engine struct {
-	db     *database.DB
-	state  *State
-	intel  ThreatIntelChecker
-	notify Notifier
-	authP  *AuthLogParser
-	webP   *WebLogParser
-	dedupe *dedupeWindow
+	db      *database.DB
+	state   *State
+	intel   ThreatIntelChecker
+	notify  Notifier
+	authP   *AuthLogParser
+	webP    *WebLogParser
+	dedupe  *dedupeWindow
+	chain   *ChainTracker   // Task 3: cross-signal attack-chain correlation state
+	scanner *ScannerTracker // Task 3: web-scanner-behavior heuristic state
 }
 
 // Config controls Engine construction.
@@ -82,19 +84,31 @@ func NewEngine(cfg Config) *Engine {
 		notify = noopNotifier{}
 	}
 	return &Engine{
-		db:     cfg.DB,
-		state:  NewState(cfg.MaxIdle),
-		intel:  intel,
-		notify: notify,
-		authP:  NewAuthLogParser(),
-		webP:   NewWebLogParser(),
-		dedupe: newDedupeWindow(2 * time.Minute),
+		db:      cfg.DB,
+		state:   NewState(cfg.MaxIdle),
+		intel:   intel,
+		notify:  notify,
+		authP:   NewAuthLogParser(),
+		webP:    NewWebLogParser(),
+		dedupe:  newDedupeWindow(2 * time.Minute),
+		chain:   NewChainTracker(cfg.MaxIdle),
+		scanner: NewScannerTracker(cfg.MaxIdle),
 	}
 }
 
 // State exposes the underlying sliding-window state, primarily so
 // cmd/vanguard's background maintenance loop can call Reap() periodically.
 func (e *Engine) State() *State { return e.state }
+
+// ChainTracker exposes the attack-chain correlation state, primarily so
+// cmd/vanguard's background maintenance loop can call Reap() periodically
+// (mirrors State() above) to keep memory bounded.
+func (e *Engine) ChainTracker() *ChainTracker { return e.chain }
+
+// ScannerTracker exposes the web-scanner-behavior heuristic state,
+// primarily so cmd/vanguard's background maintenance loop can call Reap()
+// periodically to keep memory bounded.
+func (e *Engine) ScannerTracker() *ScannerTracker { return e.scanner }
 
 // IngestAuthLogLine parses one /var/log/auth.log line and applies the SSH
 // brute-force / failed-then-success rules if it matches.
@@ -148,15 +162,24 @@ func (e *Engine) handleEvent(ev *Event) {
 	switch ev.Kind {
 	case EventSSHAuthFailure:
 		e.ruleSSHBruteForce(ev)
+		e.chain.RecordAuthFailure(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
+		e.ruleAttackChain(ev)
 	case EventSSHAuthSuccess:
 		e.ruleFailedThenSuccess(ev)
 	case EventPortTouch:
 		e.rulePortScan(ev)
+		e.chain.RecordPortTouch(ev.SourceIP, ev.Port, ev.Timestamp, thresholds.AttackChainWindow)
+		e.ruleAttackChain(ev)
 	case EventHTTPRequest:
 		e.ruleWebDirScan(ev)
 		e.rulePathTraversal(ev)
 		e.ruleSQLiXSS(ev)
 		e.ruleHTTPFlood(ev)
+		e.ruleWebScannerBehavior(ev)
+		if ev.StatusCode == 403 || ev.StatusCode == 404 {
+			e.chain.RecordWebProbe(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
+			e.ruleAttackChain(ev)
+		}
 	case EventHoneypotHit:
 		e.ruleHoneypot(ev)
 	}
@@ -395,6 +418,101 @@ func (e *Engine) ruleHoneypot(ev *Event) {
 		"decoy_service": ev.UserAgent,
 		"sample_line":   ev.RawLine,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Rule: Coordinated Attack Chain Detection (Task 3: "Smart Detection")
+//
+// Correlates three otherwise-independent weaker signals from the SAME
+// source IP within thresholds.AttackChainWindow:
+//
+//	Recon (port scan) -> Web Probing (403/404 errors) -> Auth Probing (SSH failures)
+//
+// This is deliberately checked on every event that could complete or
+// extend the chain (port touch, 403/404 response, SSH failure) rather
+// than dispatched from a single EventKind, since any one of the three
+// signals could be the one that completes the sequence.
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleAttackChain(ev *Event) {
+	reconCount, webCount, authCount, matched := e.chain.Evaluate(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
+	if !matched {
+		return
+	}
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentAttackChain) {
+		return
+	}
+
+	breakdown := risk.ScoreChain(risk.ChainInput{
+		ConstituentTypes: []database.IncidentType{
+			database.IncidentPortScan,      // recon stage
+			database.IncidentWebDirScan,    // web-probing stage
+			database.IncidentSSHBruteForce, // auth-probing stage
+		},
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+	})
+
+	e.createIncident(database.IncidentAttackChain, ev, reconCount+webCount+authCount, breakdown, map[string]any{
+		"window_seconds":     int(thresholds.AttackChainWindow.Seconds()),
+		"recon_port_count":   reconCount,
+		"web_probe_count":    webCount,
+		"auth_failure_count": authCount,
+		"stages":             "recon(port_scan) -> web_probing(403/404) -> auth_probing(ssh_failures)",
+		"note":               "aggregated risk score multiplied by 1.5 per coordinated multi-stage attack policy",
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Rule: Web Scanner Behavior Detection (heuristic, Task 3)
+//
+// Not a signature match: this fires on the *combination* of (a) a high
+// frequency of 403/404 responses from one IP in a short window, AND
+// (b) that traffic carrying a missing or known-scanner-like User-Agent.
+// Either UA condition alone is treated as "suspicious" for the purposes
+// of this heuristic (an automated tool that omits a UA entirely is just
+// as much a scanner signal as one that identifies itself as Nikto).
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleWebScannerBehavior(ev *Event) {
+	if ev.StatusCode != 403 && ev.StatusCode != 404 {
+		return
+	}
+	suspiciousUA := isMissingOrSuspiciousUA(ev.UserAgent)
+
+	total, suspicious := e.scanner.Record4xx(ev.SourceIP, ev.Timestamp, thresholds.WebScannerWindow, suspiciousUA)
+	if total < thresholds.WebScannerMin4xx || suspicious == 0 {
+		return
+	}
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentWebScanner) {
+		return
+	}
+
+	breakdown := risk.Score(risk.Input{
+		Type:                database.IncidentWebScanner,
+		EventCount:          total,
+		Threshold:           thresholds.WebScannerMin4xx,
+		MaxFrequencyBonus:   20,
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+	})
+
+	e.createIncident(database.IncidentWebScanner, ev, total, breakdown, map[string]any{
+		"window_seconds":      int(thresholds.WebScannerWindow.Seconds()),
+		"suspicious_ua_count": suspicious,
+		"last_user_agent":     ev.UserAgent,
+		"last_path":           ev.Path,
+		"heuristic":           "high-frequency 403/404 responses + missing/suspicious User-Agent",
+	})
+}
+
+// isMissingOrSuspiciousUA reports whether ua is empty/whitespace-only, or
+// contains a known automated-scanner substring (case-insensitive).
+func isMissingOrSuspiciousUA(ua string) bool {
+	if strings.TrimSpace(ua) == "" || ua == "-" {
+		return true
+	}
+	return containsAny(ua, thresholds.SuspiciousUserAgents)
 }
 
 // ---------------------------------------------------------------------------

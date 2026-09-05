@@ -45,6 +45,19 @@ const (
 	IncidentSQLiXSS           IncidentType = "sqli_xss_probe"
 	IncidentHTTPFlood         IncidentType = "http_flood"
 	IncidentHoneypotTrigger   IncidentType = "honeypot_trigger"
+
+	// IncidentAttackChain is VANGUARD's Task 3 "Smart Detection" signature:
+	// a single source IP exhibiting the coordinated multi-stage sequence
+	// Recon (port scan) -> Web Probing (403/404s) -> Auth Probing (SSH
+	// failures) within one sliding window. This is a *correlation* of
+	// existing weaker signals, not a new log pattern, so it is always the
+	// most severe signature VANGUARD can raise (see risk.ScoreChain).
+	IncidentAttackChain IncidentType = "attack_chain"
+	// IncidentWebScanner is a heuristic (not purely signature-based)
+	// detection of automated web vulnerability scanners (Nikto, Dirbuster,
+	// wpscan, etc.): a high frequency of 403/404 responses combined with a
+	// missing or known-scanner User-Agent string.
+	IncidentWebScanner IncidentType = "web_scanner_behavior"
 )
 
 // Severity is the human-readable bucket derived from RiskScore.

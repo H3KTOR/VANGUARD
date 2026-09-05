@@ -76,3 +76,63 @@ var SQLiXSSPatterns = []string{
 // always sufficient. Kept here as documentation/reference for the honeypot
 // package and honeypot simulator.
 const HoneypotAnyConnection = 1
+
+// --- Attack Chain Correlation (Task 3: Smart Detection) ---
+
+const (
+	// AttackChainWindow is the sliding window within which all three
+	// stages (recon -> web probing -> auth probing) must occur from the
+	// same source IP for the correlation engine to escalate to an
+	// ATTACK_CHAIN incident. Spec example: 5 minutes.
+	AttackChainWindow = 5 * time.Minute
+
+	// AttackChainMinDistinctPorts is the recon-stage trigger: touching
+	// this many distinct ports (within AttackChainWindow) counts as the
+	// "Port Scan" stage of the chain. Deliberately lower than the
+	// standalone PortScanDistinctPorts threshold (which has its own much
+	// tighter 30s window) since the chain only needs "recon happened
+	// recently", not a full-blown standalone port-scan incident.
+	AttackChainMinDistinctPorts = 5
+
+	// AttackChainMinWebProbes is the web-probing-stage trigger: this many
+	// 403/404 responses (within AttackChainWindow) counts as the "Web
+	// Probing" stage of the chain.
+	AttackChainMinWebProbes = 3
+
+	// AttackChainMinAuthFailures is the auth-probing-stage trigger: this
+	// many failed SSH logins (within AttackChainWindow) counts as the
+	// "Auth Probing" stage of the chain.
+	AttackChainMinAuthFailures = 3
+
+	// AttackChainRiskMultiplier is applied to the aggregated base severity
+	// of the three composite stages before clamping, per spec: "multiply
+	// the incident's aggregated Risk Score by 1.5".
+	AttackChainRiskMultiplier = 1.5
+)
+
+// --- Web Scanner Behavior Detection (heuristic, Task 3) ---
+
+const (
+	// WebScannerMin4xx is the minimum number of 403/404 responses from one
+	// IP within WebScannerWindow before the heuristic considers the
+	// traffic "scanner-like" (frequency component of the heuristic).
+	WebScannerMin4xx = 6
+	// WebScannerWindow bounds the 4xx-frequency count above.
+	WebScannerWindow = 1 * time.Minute
+)
+
+// SuspiciousUserAgents are substrings of known automated web
+// vulnerability-scanner User-Agent strings. Matching is case-insensitive.
+// This list is intentionally small and illustrative -- the heuristic in
+// rule WebScannerBehavior does NOT require a match here to fire; a missing
+// User-Agent combined with a high 4xx frequency is equally sufficient
+// (see the heuristic doc comment in engine.go). Deliberately excludes
+// generic HTTP client UAs (curl, python-requests, go-http-client, etc) --
+// those are extremely common for legitimate health checks/integrations and
+// would otherwise make the heuristic noisy; the "missing UA" signal below
+// covers the common "scanner didn't bother setting one" case instead.
+var SuspiciousUserAgents = []string{
+	"nikto", "dirbuster", "gobuster", "wpscan", "sqlmap", "nmap", "masscan",
+	"nuclei", "wfuzz", "feroxbuster", "dirb", "acunetix", "nessus", "zgrab",
+	"libwww-perl", "havij", "w3af",
+}

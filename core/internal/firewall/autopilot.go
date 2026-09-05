@@ -85,6 +85,11 @@ func DefaultConfig() Config {
 			database.IncidentSSHBruteForce:     1 * time.Hour,
 			database.IncidentPortScan:          3 * time.Hour,
 			database.IncidentHTTPFlood:         1 * time.Hour,
+			// ATTACK_CHAIN is VANGUARD's most severe correlated signature
+			// (coordinated recon -> web-probing -> auth-probing from one
+			// IP) -- ban for a full week, well beyond any other signature.
+			database.IncidentAttackChain: 7 * 24 * time.Hour,
+			database.IncidentWebScanner:  6 * time.Hour,
 		},
 		EssentialPorts:        []int{22, 80, 443},
 		PanicModeAutoRollback: 30 * time.Minute,

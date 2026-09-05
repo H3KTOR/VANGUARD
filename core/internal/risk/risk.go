@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"vanguard/core/internal/database"
+	"vanguard/core/internal/thresholds"
 )
 
 // BaseSeverity is the starting-point score for each deterministic signature,
@@ -27,6 +28,16 @@ var BaseSeverity = map[database.IncidentType]int{
 	database.IncidentSQLiXSS:           35,
 	database.IncidentHTTPFlood:         30,
 	database.IncidentHoneypotTrigger:   70, // spec: "ANY connection = CRITICAL"
+	database.IncidentWebScanner:        45, // heuristic automated-scanner behavior
+
+	// IncidentAttackChain is scored via ScoreChain, not the generic Score()
+	// formula below (it needs the aggregated-then-x1.5 treatment the spec
+	// calls for), but it still needs an entry here so any caller that falls
+	// back to the generic map (e.g. an unrelated FrequencyBonus/reputation
+	// lookup, or a future dashboard "expected base severity" display) never
+	// silently gets the conservative default of 20 for what is VANGUARD's
+	// most severe signature.
+	database.IncidentAttackChain: 90,
 }
 
 // Breakdown documents how a RiskScore was derived. Every detector (real or
@@ -143,6 +154,71 @@ func Score(in Input) Breakdown {
 // package for both scoring and bucketing.
 func Severity(total int) database.Severity {
 	return database.SeverityFromScore(total)
+}
+
+// ChainInput carries the three composite signals that fed a detected
+// ATTACK_CHAIN correlation (recon -> web probing -> auth probing), each
+// expressed as an already-scored constituent-incident-type severity, plus
+// the shared reputation/threat-intel context every other rule also
+// considers.
+type ChainInput struct {
+	// ConstituentTypes are the incident types whose BaseSeverity values are
+	// aggregated to form the chain's pre-multiplier score. Spec example:
+	// PortScan (recon) + WebDirScan (web probing) + SSHBruteForce (auth
+	// probing).
+	ConstituentTypes []database.IncidentType
+
+	RecentIncidentCount int
+	ThreatIntelHit      bool
+}
+
+// ScoreChain computes the Breakdown for a correlated ATTACK_CHAIN
+// incident. Per spec ("multiply the incident's aggregated Risk Score by
+// 1.5"), this does NOT reuse the generic additive Score() formula
+// unmodified -- it sums the BaseSeverity of every constituent signal that
+// made up the chain into a single "aggregated" base, then applies the
+// 1.5x multiplier, then still adds the same Threat Reputation component
+// every other rule uses (so a chain from a known-bad IP scores even
+// higher), and finally clamps to 100. The multiplier is applied to the
+// aggregated base ALONE (before the reputation add-on) so the "x1.5"
+// requirement has one unambiguous meaning: it amplifies the severity of
+// the coordinated behavior itself, not the unrelated reputation signal.
+func ScoreChain(in ChainInput) Breakdown {
+	aggregated := 0
+	for _, t := range in.ConstituentTypes {
+		if v, ok := BaseSeverity[t]; ok {
+			aggregated += v
+		}
+	}
+
+	multiplied := int(float64(aggregated) * thresholds.AttackChainRiskMultiplier)
+
+	rep := in.RecentIncidentCount * 5
+	if rep > 20 {
+		rep = 20
+	}
+	if in.ThreatIntelHit {
+		rep += 15
+	}
+	if rep > 30 {
+		rep = 30
+	}
+
+	total := clamp(multiplied + rep)
+
+	explanation := fmt.Sprintf(
+		"attack_chain: aggregated_base=%d (from %v) x %.1f = %d + reputation=%d (%d recent incidents, threat_intel=%v) = %d",
+		aggregated, in.ConstituentTypes, thresholds.AttackChainRiskMultiplier, multiplied, rep, in.RecentIncidentCount, in.ThreatIntelHit, total,
+	)
+
+	return Breakdown{
+		BaseSeverity:    aggregated,
+		FrequencyBonus:  multiplied - aggregated, // the delta the x1.5 multiplier contributed
+		ReputationBonus: rep,
+		EscalationBonus: 0,
+		Total:           total,
+		Explanation:     explanation,
+	}
 }
 
 func clamp(v int) int {

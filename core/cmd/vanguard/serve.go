@@ -272,8 +272,15 @@ func (a *app) runMaintenanceTick(ctx context.Context) {
 		log.Printf("[serve] maintenance: reaped %d expired ban(s)", n)
 	}
 
-	if n := a.engine.State().Reap(time.Now().UTC()); n > 0 {
+	now := time.Now().UTC()
+	if n := a.engine.State().Reap(now); n > 0 {
 		log.Printf("[serve] maintenance: reaped %d idle in-memory IP tracker(s)", n)
+	}
+	if n := a.engine.ChainTracker().Reap(now); n > 0 {
+		log.Printf("[serve] maintenance: reaped %d idle attack-chain tracker(s)", n)
+	}
+	if n := a.engine.ScannerTracker().Reap(now); n > 0 {
+		log.Printf("[serve] maintenance: reaped %d idle web-scanner tracker(s)", n)
 	}
 }
 
