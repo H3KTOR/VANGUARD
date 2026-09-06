@@ -1,0 +1,68 @@
+# lab/docker-compose.yml
+#
+# VANGUARD Automated Security Test Lab (Task 4).
+#
+# Spins up two containers on an isolated bridge network:
+#   - victim:   builds and runs the real VANGUARD Go binary on top of a
+#               real sshd + nginx, exactly as it would run in production.
+#   - attacker: a small toolkit container (nmap/hydra/curl) that fires
+#               synthetic-but-real attacks at `victim` from run-tests.sh.
+#
+# Per the project's hard constraints, Docker is used ONLY here -- this
+# directory is the one sanctioned exception for isolated testing. Nothing
+# under lab/ is part of VANGUARD's production build or deploy path.
+#
+# Usage:
+#   cd lab
+#   docker compose up -d --build victim
+#   docker compose run --rm attacker ./run-tests.sh
+#   docker compose down -v
+services:
+  victim:
+    build:
+      context: ..
+      dockerfile: lab/victim/Dockerfile
+    container_name: vanguard-lab-victim
+    hostname: victim
+    networks:
+      lab_net:
+        ipv4_address: 172.28.0.10
+    ports:
+      # Published to the host only for convenience when driving the lab
+      # manually; run-tests.sh itself talks container-to-container over
+      # lab_net and never needs these.
+      - "8080:8080"
+    # VANGUARD's Autopilot defaults to an in-memory MockExecutor (no -ufw
+    # flag), so no elevated container privileges are needed to observe
+    # real detection + simulated-ban behavior end-to-end.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  attacker:
+    build:
+      context: ..
+      dockerfile: lab/attacker/Dockerfile
+    container_name: vanguard-lab-attacker
+    hostname: attacker
+    networks:
+      lab_net:
+        ipv4_address: 172.28.0.20
+    depends_on:
+      victim:
+        condition: service_healthy
+    # Keep the container alive when started standalone (`docker compose up
+    # attacker`); run-tests.sh is normally invoked directly via
+    # `docker compose run --rm attacker ./run-tests.sh` instead, which
+    # overrides this command.
+    command: ["-c", "sleep infinity"]
+
+networks:
+  lab_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

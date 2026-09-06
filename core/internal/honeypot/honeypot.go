@@ -53,13 +53,26 @@ type Decoy struct {
 }
 
 // DefaultDecoys mirrors the examples from the spec: "fake ports (e.g. 2222
-// for fake SSH, 33060 for fake MySQL)", plus a fake admin panel port for
-// broader web-scanner coverage.
+// for fake SSH, 33060 for fake MySQL)", plus a handful of other commonly
+// scanned services for broader coverage against automated recon tools
+// (nmap, masscan) -- more decoy variety means more scanners get caught
+// regardless of which service they're specifically probing for. Every
+// touch across ALL of these ports also feeds the Task 3 Attack Chain
+// correlation engine's "Recon" stage (see engine.go's handleEvent), since
+// a connection to any decoy port is unambiguous recon-stage evidence --
+// this is precisely the "honeypot's own listeners for non-decoy ports"
+// production recon source anticipated by Engine.IngestPortTouch's doc
+// comment.
 func DefaultDecoys() []Decoy {
 	return []Decoy{
+		{Port: 21, Service: "fake-ftp", Banner: "220 (vsFTPd 3.0.5)\r\n"},
+		{Port: 23, Service: "fake-telnet", Banner: ""},
 		{Port: 2222, Service: "fake-ssh", Banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.4\r\n"},
-		{Port: 33060, Service: "fake-mysql", Banner: "\x4a\x00\x00\x00\x0a8.0.34\x00"},
+		{Port: 3389, Service: "fake-rdp", Banner: ""},
+		{Port: 5432, Service: "fake-postgres", Banner: ""},
+		{Port: 6379, Service: "fake-redis", Banner: "-ERR unknown command\r\n"},
 		{Port: 8081, Service: "fake-admin-panel", Banner: ""},
+		{Port: 33060, Service: "fake-mysql", Banner: "\x4a\x00\x00\x00\x0a8.0.34\x00"},
 	}
 }
 

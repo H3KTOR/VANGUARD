@@ -182,6 +182,13 @@ func (e *Engine) handleEvent(ev *Event) {
 		}
 	case EventHoneypotHit:
 		e.ruleHoneypot(ev)
+		// A decoy-port connection is unambiguous recon-stage evidence for
+		// the Attack Chain correlation too (see DefaultDecoys' doc comment
+		// in internal/honeypot) -- feed it into the same ChainTracker a
+		// raw EventPortTouch would use, so a real nmap scan that happens
+		// to sweep a decoy port still counts toward the Recon stage.
+		e.chain.RecordPortTouch(ev.SourceIP, ev.Port, ev.Timestamp, thresholds.AttackChainWindow)
+		e.ruleAttackChain(ev)
 	}
 }
 
