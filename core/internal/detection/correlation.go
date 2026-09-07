@@ -139,9 +139,25 @@ func (c *ChainTracker) Evaluate(ip string, now time.Time, window time.Duration) 
 		return reconCount, webCount, authCount, false
 	}
 
-	reconFirst := earliestPortTouch(st.portTouches)
-	webFirst := st.webProbes[0]
-	authFirst := st.authFails[0]
+	// Truncate to whole-second precision before comparing. The three
+	// stages come from sources with different native timestamp
+	// resolution: honeypot hits are stamped with time.Now() (nanosecond
+	// precision), while auth.log (syslog "Jan _2 15:04:05") and nginx's
+	// combined access-log format both carry only whole-second precision.
+	// A fast, legitimately-ordered attack (recon -> web -> auth all
+	// within the same wall-clock second, exactly what an automated
+	// scanner/tool chain produces) can otherwise have its nanosecond-
+	// precision recon timestamp compare as "after" a same-second but
+	// zero-fraction web-probe timestamp purely due to that resolution
+	// mismatch, spuriously failing the sequence check below even though
+	// the events are correctly ordered (or simultaneous) in reality.
+	// Comparing at second resolution is exactly the tie-tolerance the
+	// doc comment below already intends, just applied consistently
+	// regardless of which stage happened to be the live (sub-second)
+	// timestamp.
+	reconFirst := earliestPortTouch(st.portTouches).Truncate(time.Second)
+	webFirst := st.webProbes[0].Truncate(time.Second)
+	authFirst := st.authFails[0].Truncate(time.Second)
 
 	// Sequence check: recon must start no later than web probing, which
 	// must start no later than auth probing. Equal timestamps are allowed

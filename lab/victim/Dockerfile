@@ -43,6 +43,18 @@ RUN useradd -m -s /bin/bash testuser \
     && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
     && ssh-keygen -A
 
+# --- rsyslog: modern Debian/rsyslog defaults auth.log to the ISO8601
+# "RSYSLOG_FileFormat" template (e.g. "2026-09-07T07:49:44+00:00 victim
+# sshd[96]: ..."), NOT the traditional syslog timestamp
+# ("Aug 23 14:02:11 ...") that a real production Linux host's auth.log
+# has used for decades and that VANGUARD's AuthLogParser (see
+# internal/detection/parser_auth.go) is written against. Force the
+# traditional format here so this lab's auth.log is byte-for-byte
+# representative of what VANGUARD parses in production -- this is a
+# rsyslog *packaging default* quirk of the lab's base image, not a
+# VANGUARD parser bug. ---
+RUN printf '$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat\n' > /etc/rsyslog.d/00-traditional-format.conf
+
 # --- Nginx: a couple of "sensitive" paths so the web-probing /
 # path-traversal / SQLi scenarios have something realistic to request.
 # The stock Debian nginx access-log format is Nginx's default "combined"

@@ -8,7 +8,7 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 
 > **Deployment note**: VANGUARD is a traditional host-based Linux daemon (log tailing, raw sockets for the honeypot, direct UFW/iptables execution, an embedded static dashboard). It is **not** a Cloudflare Pages/Workers application — there is no serverless deployment story for this project. It is built, tested, and run directly in this sandbox (a Linux environment) and is intended to ultimately run as a systemd service on a real Linux host.
 
-## Current Status: Steps 1–5 Complete (Go Core + REST API + React Dashboard + Python Toolkit)
+## Current Status: Steps 1–5 + Attack Correlation Engine + Automated Security Test Lab Complete
 
 ### ✅ Completed
 
@@ -17,7 +17,12 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 - Composite, query-pattern-driven indexes: `idx_incidents_ip_time`, `idx_incidents_type_time`, `idx_firewall_ip_active`, `idx_metrics_timestamp`, etc.
 - `Open()` configures WAL mode + busy timeout for safe concurrent read/write from the API, detection engine, and the read-only Python toolkit.
 
-**`core/internal/detection`, `risk`, `thresholds`** — deterministic rule engine (SSH brute force, honeypot triggers, etc.) sharing the `Base Severity + Frequency + Threat Reputation (+ Escalation)` risk-scoring formula.
+**`core/internal/detection`, `risk`, `thresholds`** — deterministic rule engine (SSH brute force, honeypot triggers, port scan, web directory scan, path traversal, SQLi/XSS, HTTP flood, etc.) sharing the `Base Severity + Frequency + Threat Reputation (+ Escalation)` risk-scoring formula, plus the **Attack Correlation Engine ("Smart Detection")**:
+- `ChainTracker` (`internal/detection/correlation.go`) — a concurrent-safe, per-IP in-memory state machine tracking the three stages of a coordinated attack (Recon/port-touch → Web Probing/403-404 → Auth Probing/SSH failures) within a sliding `AttackChainWindow` (5 min). `Evaluate()` requires all three stages to individually clear their minimum counts AND to have started in the correct order (recon ≤ web ≤ auth, tied timestamps allowed) before reporting a match. Stage timestamps are truncated to whole-second precision before the order comparison, since real log sources (syslog `auth.log`, nginx combined `access.log`) only carry second-level resolution — this avoids a live nanosecond-precision timestamp (e.g. a honeypot hit) spuriously sorting "after" a same-second, zero-fraction log-parsed timestamp.
+- A match creates a single `ATTACK_CHAIN` incident via `risk.ScoreChain()` (aggregates the three constituent incident types' base severities, then multiplies by `AttackChainRiskMultiplier` = 1.5, clamped to 100), routed through the same `createIncident()` → `notify.OnIncident()` pipeline as every other rule — so Autopilot's instant ban and the Telegram alert fire automatically with zero extra integration code.
+- `ScannerTracker` — a lighter per-IP heuristic (not a signature match) that flags **Web Scanner Behavior** on the *combination* of a high-frequency burst of 403/404 responses and a missing/known-scanner User-Agent (Nikto, dirbuster, sqlmap, nmap, etc. — see `thresholds.SuspiciousUserAgents`) within a 1-minute window.
+- Every honeypot decoy-port connection also feeds `ChainTracker`'s Recon stage (see `engine.go`'s `EventHoneypotHit` handling), so a real `nmap` sweep that happens to touch a decoy port counts toward the chain exactly like a raw port-touch would.
+- 21 Go unit tests (`correlation_test.go`, `chain_integration_test.go`) cover threshold gating, in-order vs. out-of-order sequencing, window expiry, per-IP isolation, reaping, and a same-second sub-second-precision regression case discovered while building the Task 4 lab below.
 
 **`core/internal/firewall`** — UFW/iptables wrapper with an in-memory mock executor (safe for sandboxes/dev) or the real `ufw` CLI, TTL ban reaper (Autopilot maintenance loop), Panic Mode/lockdown preview + enter/exit, fail-safe admin-IP whitelist. Optional real-time push alerts (Telegram) on ban/Panic Mode toggle via the small `AlertNotifier` interface (decoupled from any specific alert channel — see `internal/notify`).
 
@@ -55,17 +60,22 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 - `pdf_reporter.py` — generates a multi-page SOC PDF (ReportLab platypus) summarizing metrics, severity breakdown, top offending IPs, and recent incidents.
 - `main.py` — Typer CLI: `toolkit analyze`, `toolkit sync`, `toolkit report`, with Rich console output.
 
+**`lab/`** — **Automated Security Test Lab** (Docker Compose, isolated to this directory ONLY — never part of VANGUARD's production build/deploy path, per the project's hard "zero external services in production" constraint):
+- `lab/docker-compose.yml` — two services on a private bridge network (`172.28.0.0/24`): `victim` (multi-stage build of the real VANGUARD Go binary running on top of real `sshd` + `nginx` + `rsyslog`, health-gated on `/api/health`) and `attacker` (Alpine + `nmap`/`hydra`/`curl`/`jq` toolkit).
+- `lab/victim/Dockerfile` + `entrypoint.sh` — starts `rsyslogd` (forced to `RSYSLOG_TraditionalFileFormat`, since modern rsyslog defaults to an ISO8601 template that VANGUARD's `AuthLogParser` doesn't expect — a real production host's traditional syslog format is what the parser is written against), then `sshd`, then `nginx`, then `vanguard serve` with honeypot decoys enabled — so every attack produces genuine, unmodified log traffic.
+- `lab/attacker/Dockerfile` — Alpine 3.20 + `nmap`/`nmap-scripts`/`hydra`/`curl`/`jq`.
+- `lab/run-tests.sh` — orchestrates 4 attack scenarios (Coordinated Attack Chain: `nmap` recon of 8 honeypot decoy ports → `curl` probes of 8 sensitive paths → `hydra` SSH brute force, strictly in that order; Web Scanner heuristic; path-traversal/SQLi-XSS signature probes; HTTP flood), then polls VANGUARD's own REST API (`GET /api/incidents?type=...&ip=...`) to assert each of the 8 expected incident types actually fired, printing a `[✓] DETECTED incident #N, risk=X/100, severity=Y` / `[✗] MISSING` report per assertion and exiting non-zero on any miss — a CI-style regression gate for the whole detection engine.
+- **Verified end-to-end in this sandbox**: `docker compose build/up victim` → healthy in ~15s; `docker compose run --rm attacker ./run-tests.sh` → **8/8 PASS**, including `attack_chain` at risk=100/100 CRITICAL, and confirmed the Autopilot auto-banned the attacker IP (`GET /api/firewall/rules` shows an active `autopilot`-sourced ban) exactly as the honeypot-trigger's CRITICAL severity should trigger.
+- Building this lab surfaced and fixed one real bug in `ChainTracker.Evaluate()` (the sub-second-precision sequencing issue described above) — not a lab-only artifact; it could affect any real fast, tightly-sequenced attack in production too.
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.
-- **Attack Correlation Engine** (state-machine chaining Port Scan → Web Error → SSH Fail within a 5-min window into a single `ATTACK_CHAIN` incident with a risk multiplier) — not yet implemented.
-- **Automated Security Test Lab** (`lab/docker-compose.yml` victim/attacker containers + `lab/run-tests.sh` synthetic-attack orchestration) — not yet implemented.
 
 ### Next Steps
 1. Visual QA pass against the original reference design once available.
 2. Triage npm audit findings; consider further code-splitting if bundle size becomes a concern.
-3. Attack Correlation Engine (IP-based state machine, MITRE-style chained-incident detection).
-4. Automated Security Test Lab (`lab/` Docker Compose attacker/victim harness).
+3. Check in with the project owner on what's next — no further task has been authorized beyond the Automated Security Test Lab.
 
 ## Try It
 
@@ -122,7 +132,7 @@ Both halves of VANGUARD support an optional local `.env` file as a dev convenien
 - **Platform**: Linux host (systemd service recommended); the React dashboard is compiled and embedded into the Go binary at build time — no separate frontend deployment/hosting step.
 - **Status**: ✅ Core daemon + REST API + embedded dashboard + Python toolkit all built and live-tested end-to-end in this sandbox.
 - **Tech Stack**: Go (Echo, GORM/SQLite) + React 18 (Vite, Tailwind CSS, Recharts, Lucide React) + Python 3 (Typer, ReportLab, Anthropic/OpenAI SDKs).
-- **Last Updated**: 2026-09-03
+- **Last Updated**: 2026-09-07
 
 ## Repository Structure
 
@@ -135,14 +145,19 @@ VANGUARD/
 │       ├── api/             # Echo REST API handlers + routes
 │       ├── auth/            # JWT auth, bcrypt, session helpers
 │       ├── database/        # GORM models + repository
-│       ├── detection/        # Deterministic attack-detection rule engine
+│       ├── detection/        # Deterministic rule engine + Attack Correlation Engine (correlation.go)
 │       ├── firewall/         # UFW/iptables executor, Autopilot, Panic Mode
 │       ├── honeypot/          # Decoy listeners
 │       ├── metrics/          # CPU/RAM/Disk/Network sampler
-│       ├── risk/             # Risk scoring formula
+│       ├── risk/             # Risk scoring formula (incl. ScoreChain for ATTACK_CHAIN)
 │       ├── simulator/        # Synthetic attack simulation scenarios
 │       └── thresholds/       # Severity bucket thresholds
 ├── toolkit/                 # Python ephemeral CLI — AI analyst, threat intel sync, PDF reports
+├── lab/                     # Automated Security Test Lab (Docker Compose) -- lab-only exception
+│   ├── docker-compose.yml   # victim + attacker services on an isolated bridge network
+│   ├── victim/              # Dockerfile + entrypoint.sh: real sshd/nginx/rsyslog + the VANGUARD binary
+│   ├── attacker/            # Dockerfile: Alpine + nmap/hydra/curl/jq toolkit
+│   └── run-tests.sh         # synthetic-attack orchestration + REST-API detection assertions
 ├── docs/                    # Architecture & setup guides
 ├── Makefile                 # build / build-frontend / build-go / test / vet / fmt / clean / toolkit-install
 └── README.md

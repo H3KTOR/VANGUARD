@@ -64,6 +64,56 @@ func TestChainTracker_MatchesFullSequenceInOrder(t *testing.T) {
 	}
 }
 
+// TestChainTracker_SameSecondSubSecondPrecisionMismatchStillMatches is a
+// regression test for a real bug found while running the Task 4 lab
+// (lab/run-tests.sh) against a genuine nmap -> curl -> hydra attack chain:
+// honeypot/port-touch events are stamped with time.Now() (nanosecond
+// precision), while auth.log (syslog "Jan _2 15:04:05") and nginx combined
+// access-log timestamps are parsed with only whole-second precision. A
+// fast automated attack chain that completes all three stages within the
+// same wall-clock second -- exactly what scripted tools produce -- used to
+// spuriously fail the sequence check, because the live nanosecond-precision
+// recon timestamp compared as "after" the truncated-to-:00 web/auth
+// timestamps from the same second. Evaluate must truncate all three stage
+// timestamps to second resolution before comparing, so same-second stages
+// are correctly treated as tied (see the "Equal timestamps are allowed"
+// comment in Evaluate).
+func TestChainTracker_SameSecondSubSecondPrecisionMismatchStillMatches(t *testing.T) {
+	ct := NewChainTracker(0)
+	ip := "198.51.100.9"
+
+	// A whole-second timestamp, as if parsed from a log line with no
+	// fractional-second component (auth.log / nginx combined format).
+	wholeSecond := time.Date(2026, 9, 7, 7, 53, 45, 0, time.UTC)
+
+	// Recon: a live, nanosecond-precision timestamp landing in the SAME
+	// second as the web/auth stages below -- e.g. a honeypot hit recorded
+	// via time.Now().UTC() a few hundred milliseconds into that second.
+	reconTS := wholeSecond.Add(246998447 * time.Nanosecond)
+	for p := 0; p < thresholds.AttackChainMinDistinctPorts; p++ {
+		ct.RecordPortTouch(ip, 3000+p, reconTS, thresholds.AttackChainWindow)
+	}
+
+	// Web probing: whole-second timestamps parsed from a log, same second
+	// as recon (and even the same instant or slightly "before" it at
+	// nanosecond resolution, despite happening after in real time).
+	for i := 0; i < thresholds.AttackChainMinWebProbes; i++ {
+		ct.RecordWebProbe(ip, wholeSecond, thresholds.AttackChainWindow)
+	}
+
+	// Auth probing: also whole-second, a few seconds later (still parsed
+	// from a log with no sub-second precision).
+	authTS := wholeSecond.Add(8 * time.Second)
+	for i := 0; i < thresholds.AttackChainMinAuthFailures; i++ {
+		ct.RecordAuthFailure(ip, authTS.Add(time.Duration(i)*time.Second), thresholds.AttackChainWindow)
+	}
+
+	_, _, _, matched := ct.Evaluate(ip, authTS.Add(5*time.Second), thresholds.AttackChainWindow)
+	if !matched {
+		t.Fatalf("expected same-second recon/web timestamps (differing only in sub-second precision) to still match as a correctly-ordered chain")
+	}
+}
+
 func TestChainTracker_OutOfOrderSequenceDoesNotMatch(t *testing.T) {
 	ct := NewChainTracker(0)
 	ip := "198.51.100.3"
