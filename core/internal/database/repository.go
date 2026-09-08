@@ -271,6 +271,63 @@ func (db *DB) ListFirewallRules(activeOnly bool) ([]FirewallRule, error) {
 	return rules, err
 }
 
+// ---------------------------------------------------------------------------
+// Host Security Baselines (Phase 1: FIM / Persistence / Account / SUID-SGID)
+// ---------------------------------------------------------------------------
+
+// GetHostBaseline fetches the current baseline row for (category, key), or
+// ErrNotFound if this is the first time the scanner has seen this key
+// (i.e. a brand-new file/entry -- the caller should treat this as a
+// "created" event, not an error).
+func (db *DB) GetHostBaseline(category HostBaselineCategory, key string) (*HostFileBaseline, error) {
+	var b HostFileBaseline
+	if err := db.Where("category = ? AND key = ?", category, key).First(&b).Error; err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// ListHostBaseline returns every baseline row for a category, used by
+// scanners to detect "deleted" entries (present in the baseline, absent
+// from the current live scan).
+func (db *DB) ListHostBaseline(category HostBaselineCategory) ([]HostFileBaseline, error) {
+	var rows []HostFileBaseline
+	err := db.Where("category = ?", category).Find(&rows).Error
+	return rows, err
+}
+
+// UpsertHostBaseline inserts or updates the baseline row for
+// (category, key), stamping LastSeenAt = now. Used after a scanner has
+// evaluated a diff and decided the new state should become the baseline
+// going forward (whether or not an incident was raised for the change).
+func (db *DB) UpsertHostBaseline(category HostBaselineCategory, key, content string) error {
+	now := time.Now().UTC()
+	var existing HostFileBaseline
+	err := db.Where("category = ? AND key = ?", category, key).First(&existing).Error
+	if err == nil {
+		existing.Content = content
+		existing.LastSeenAt = now
+		return db.Save(&existing).Error
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return db.Create(&HostFileBaseline{
+		Category:   category,
+		Key:        key,
+		Content:    content,
+		LastSeenAt: now,
+	}).Error
+}
+
+// DeleteHostBaseline removes the baseline row for (category, key), used
+// once a scanner has raised a "deleted" incident for a path/entry that no
+// longer exists, so a future re-creation of the same key is correctly
+// treated as "created" again rather than silently reusing a stale row.
+func (db *DB) DeleteHostBaseline(category HostBaselineCategory, key string) error {
+	return db.Where("category = ? AND key = ?", category, key).Delete(&HostFileBaseline{}).Error
+}
+
 // compile-time: ensure errors.Is usage pattern documented above type-checks
 // against the aliased ErrNotFound.
 var _ = errors.Is

@@ -38,6 +38,20 @@ var BaseSeverity = map[database.IncidentType]int{
 	// silently gets the conservative default of 20 for what is VANGUARD's
 	// most severe signature.
 	database.IncidentAttackChain: 90,
+
+	// --- Host Security (Phase 1) ---
+	// These base severities are intentionally high: every one of these
+	// signatures represents host-local evidence with essentially no
+	// legitimate-traffic false-positive surface (unlike, say, a single
+	// 404), so per Phase 16's "confidence-threshold" guidance the prior
+	// (base severity) itself should already reflect high confidence.
+	// Specific escalations (e.g. SUID binary in /tmp) still use the
+	// Escalate/EscalationBonus mechanism on top of these.
+	database.IncidentFIMChange:           60, // HIGH tier: modification of a sensitive file baseline
+	database.IncidentPersistenceDetected: 55, // HIGH tier: new/changed persistence mechanism
+	database.IncidentPrivilegeEscalation: 65, // HIGH tier: privilege escalation indicator
+	database.IncidentAccountChange:       50, // MEDIUM/HIGH boundary: account/group mutation
+	database.IncidentSUIDSGIDAnomaly:     55, // HIGH tier; Escalate bumps to CRITICAL if in a writable dir
 }
 
 // Breakdown documents how a RiskScore was derived. Every detector (real or

@@ -136,3 +136,99 @@ var SuspiciousUserAgents = []string{
 	"nuclei", "wfuzz", "feroxbuster", "dirb", "acunetix", "nessus", "zgrab",
 	"libwww-perl", "havij", "w3af",
 }
+
+// --- Host Security (VANGUARD Mega Expansion, Phase 1) ---
+//
+// No eBPF / kernel modules are used anywhere below (per Architectural Rule
+// #3): every scanner relies on periodic filesystem inspection, /etc parsing,
+// and best-effort /proc walks. Intervals are deliberately minutes-scale (not
+// seconds) since these are batch filesystem/process scans, not per-request
+// hot-path work -- keeping CPU usage negligible on a "~25MB binary, near-zero
+// overhead" host per the project's core philosophy (Phase 13: Performance).
+
+const (
+	// FIMScanInterval is how often the File Integrity Monitor re-hashes
+	// every watched path and diffs against its baseline.
+	FIMScanInterval = 2 * time.Minute
+
+	// PersistenceScanInterval is how often cron/systemd/SSH-keys/shell
+	// startup files/sudoers are re-read and diffed for new/changed
+	// persistence mechanisms.
+	PersistenceScanInterval = 3 * time.Minute
+
+	// AccountScanInterval is how often /etc/passwd, /etc/shadow (metadata
+	// only, never contents), and /etc/group are re-read and diffed.
+	AccountScanInterval = 3 * time.Minute
+
+	// PrivEscScanInterval is how often sudoers/privileged-group membership
+	// and (best-effort) running root processes are re-checked.
+	PrivEscScanInterval = 2 * time.Minute
+
+	// SUIDScanInterval is how often the filesystem is walked for
+	// SUID/SGID-bit binaries. Kept less frequent than the others since a
+	// full filesystem walk is the most expensive of these scans; a
+	// bounded set of root directories (see hostsec.DefaultSUIDScanRoots)
+	// keeps even this manageable.
+	SUIDScanInterval = 10 * time.Minute
+
+	// HostScanTimeout bounds how long any single scan tick (one full
+	// pass of one scanner) may run before it is abandoned via context
+	// cancellation, so a pathological filesystem (e.g. a stuck network
+	// mount) can never wedge a scanner goroutine forever.
+	HostScanTimeout = 30 * time.Second
+
+	// WritableDirEscalationNote documents the SUID/SGID escalation rule:
+	// a SUID/SGID binary discovered under one of these directories (or
+	// any directory whose own mode bits are world-writable) is escalated
+	// to CRITICAL, since dropping a SUID binary into a writable location
+	// is a classic privilege-escalation technique.
+	WritableDirEscalationNote = "suid/sgid binary in world-writable or temp directory"
+)
+
+// DefaultFIMPaths are the sensitive files/directories monitored by the File
+// Integrity Monitor out of the box (feature 1). Operators can extend this
+// via -fim-paths.
+var DefaultFIMPaths = []string{
+	"/etc/passwd",
+	"/etc/shadow",
+	"/etc/group",
+	"/etc/sudoers",
+	"/etc/sudoers.d",
+	"/etc/ssh/sshd_config",
+	"/root/.ssh/authorized_keys",
+	"/etc/crontab",
+	"/etc/cron.d",
+	"/etc/systemd/system",
+}
+
+// DefaultSUIDScanRoots are the directories walked by the SUID/SGID
+// monitor. Bounded to the standard binary locations (rather than a full "/"
+// walk) to keep scan time and I/O negligible, per Phase 13's performance
+// requirements.
+var DefaultSUIDScanRoots = []string{
+	"/bin", "/sbin", "/usr/bin", "/usr/sbin", "/usr/local/bin", "/usr/local/sbin",
+}
+
+// WritableScanRoots are additional, smaller directories scanned for SUID
+// binaries specifically because *any* SUID/SGID binary appearing here is
+// automatically CRITICAL (see WritableDirEscalationNote) -- these are the
+// classic locations an attacker drops a privilege-escalation payload.
+var WritableScanRoots = []string{
+	"/tmp", "/var/tmp", "/dev/shm",
+}
+
+// ShellStartupFiles are the shell-profile persistence locations checked by
+// the Persistence Detector (feature 2), beyond /etc/profile(.d) and
+// per-user authorized_keys (which are enumerated dynamically from
+// /etc/passwd home directories, not listed here).
+var ShellStartupFiles = []string{
+	"/etc/profile",
+	"/etc/bash.bashrc",
+}
+
+// PrivilegedGroups are the group names whose membership changes are
+// treated as privilege-escalation-relevant by the Account/PrivEsc
+// detectors (feature 3 & 4).
+var PrivilegedGroups = []string{
+	"sudo", "wheel", "root", "adm", "docker", "shadow", "disk",
+}

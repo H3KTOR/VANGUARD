@@ -58,7 +58,61 @@ const (
 	// wpscan, etc.): a high frequency of 403/404 responses combined with a
 	// missing or known-scanner User-Agent string.
 	IncidentWebScanner IncidentType = "web_scanner_behavior"
+
+	// -----------------------------------------------------------------
+	// Host Security signatures (VANGUARD Mega Expansion, Phase 1).
+	//
+	// Unlike every incident type above -- which is always attributable
+	// to a remote SourceIP observed in a log line -- these five are
+	// raised by periodic HOST-LOCAL inspection (filesystem, /etc,
+	// /proc) with no network origin at all. By convention they are
+	// persisted with SourceIP = HostLocalIP ("127.0.0.1"), which is
+	// unconditionally seeded into the Autopilot fail-safe whitelist
+	// (see firewall.DefaultConfig) so a host-security finding can NEVER
+	// trigger an accidental self-ban of the loopback address. Autopilot
+	// still records/logs these incidents; it simply never *bans* them,
+	// since there is no attacker IP to block -- containment for this
+	// class of finding is a human-in-the-loop / future-phase concern,
+	// not an automatic firewall action.
+	// -----------------------------------------------------------------
+
+	// IncidentFIMChange: a monitored sensitive file's SHA-256, size,
+	// permissions, owner, group, or existence changed relative to its
+	// last-known-good baseline (created/deleted/modified/perm_changed/
+	// owner_changed/group_changed -- see the "change" field in Metadata).
+	IncidentFIMChange IncidentType = "fim_change"
+
+	// IncidentPersistenceDetected: a new or modified persistence
+	// mechanism was observed (cron entry, systemd unit/timer, SSH
+	// authorized_keys addition, shell startup file, /etc/profile.d
+	// script, or sudoers entry).
+	IncidentPersistenceDetected IncidentType = "persistence_detected"
+
+	// IncidentPrivilegeEscalation: an indicator consistent with a
+	// privilege-escalation attempt or successful escalation (new UID 0
+	// account, privileged group membership change, a new SUID/SGID
+	// binary in a world-writable/temp directory, or -- best-effort,
+	// since VANGUARD has no eBPF/kernel visibility -- an unexpected
+	// root-owned process).
+	IncidentPrivilegeEscalation IncidentType = "privilege_escalation_indicator"
+
+	// IncidentAccountChange: a user or group was created/deleted, or an
+	// existing account's UID/GID or privileged-group membership changed.
+	IncidentAccountChange IncidentType = "account_security_change"
+
+	// IncidentSUIDSGIDAnomaly: a SUID/SGID-bit binary appeared,
+	// disappeared, or had its owner/mode changed relative to the last
+	// baseline scan. CRITICAL-escalated when the binary lives under a
+	// world-writable or temp directory (/tmp, /var/tmp, /dev/shm, or any
+	// directory whose own mode is world-writable) -- a classic
+	// privilege-escalation-via-dropped-SUID-binary pattern.
+	IncidentSUIDSGIDAnomaly IncidentType = "suid_sgid_anomaly"
 )
+
+// HostLocalIP is the sentinel SourceIP value used for every host-security
+// incident (FIM, Persistence, Privilege Escalation, Account, SUID/SGID) --
+// see the doc comment on IncidentFIMChange above for the full rationale.
+const HostLocalIP = "127.0.0.1"
 
 // Severity is the human-readable bucket derived from RiskScore.
 // See RiskScore.Severity() for the authoritative mapping (0-29 LOW,
@@ -237,6 +291,81 @@ func (f *FirewallRule) IsExpired(now time.Time) bool {
 	return f.UnbanAt != nil && now.After(*f.UnbanAt)
 }
 
+// ---------------------------------------------------------------------------
+// HostFileBaseline (Host Security, Phase 1)
+// ---------------------------------------------------------------------------
+
+// HostBaselineCategory partitions the single HostFileBaseline table by
+// scanner, so FIM / Persistence / Account / SUID-SGID each own a disjoint
+// key space (Category, Key) without needing four near-identical tables.
+type HostBaselineCategory string
+
+const (
+	// BaselineFIM: Category=fim, Key=absolute file path. One row per
+	// path in the FIM watch list (see hostsec.DefaultFIMPaths).
+	BaselineFIM HostBaselineCategory = "fim"
+	// BaselinePersistence: Category=persistence, Key=a stable identifier
+	// for one persistence entry (e.g. "cron:/etc/crontab:0", "authorized_keys:testuser:<key-fingerprint>",
+	// "systemd:ssh.service"). See hostsec/persistence.go for exact key shapes.
+	BaselinePersistence HostBaselineCategory = "persistence"
+	// BaselineAccount: Category=account, Key="user:<name>" or "group:<name>".
+	BaselineAccount HostBaselineCategory = "account"
+	// BaselineSUID: Category=suid, Key=absolute binary path. One row per
+	// SUID/SGID binary found on the host filesystem.
+	BaselineSUID HostBaselineCategory = "suid"
+	// BaselinePrivEsc: Category=privesc, Key=a stable identifier for one
+	// privilege-escalation-relevant fact (e.g. "group_member:sudo:alice",
+	// "uid0:root", "sudoers_rule:<hash>", "root_proc:<exe-path>"). See
+	// hostsec/privesc.go for exact key shapes.
+	BaselinePrivEsc HostBaselineCategory = "privesc"
+)
+
+// HostFileBaseline is a single last-known-good snapshot used by the Host
+// Security scanners (FIM, Persistence, Account, SUID/SGID) to diff the
+// current system state against on every scan tick. Persisted (rather than
+// held only in memory, like the network-detection State/ChainTracker in
+// internal/detection) because these scans are periodic and infrequent
+// (minutes, not per-request) -- an in-memory-only baseline would be lost on
+// every VANGUARD restart and spuriously re-report every watched path as
+// "created" on the first post-restart scan, which is exactly the kind of
+// noisy false positive Phase 16 (False Positive Protection) forbids.
+//
+// Content is a small free-form JSON blob (hash/size/mode/owner/group/extra
+// scanner-specific fields) rather than dedicated columns, mirroring
+// Incident.Metadata's own "schema never needs an ALTER TABLE for a new
+// scanner field" rationale.
+type HostFileBaseline struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+
+	Category HostBaselineCategory `gorm:"size:32;not null;uniqueIndex:idx_hostbaseline_cat_key,priority:1" json:"category"`
+	Key      string                `gorm:"size:512;not null;uniqueIndex:idx_hostbaseline_cat_key,priority:2" json:"key"`
+
+	Content string `gorm:"type:text" json:"content"`
+
+	LastSeenAt time.Time `gorm:"not null" json:"last_seen_at"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// SetContent marshals v into the Content column as JSON.
+func (h *HostFileBaseline) SetContent(v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	h.Content = string(b)
+	return nil
+}
+
+// GetContent unmarshals the Content column into v. Returns nil (no-op) if
+// Content is empty.
+func (h *HostFileBaseline) GetContent(v any) error {
+	if h.Content == "" {
+		return nil
+	}
+	return json.Unmarshal([]byte(h.Content), v)
+}
+
 // AllModels returns every struct that must be migrated by AutoMigrate, in a
 // safe dependency order.
 func AllModels() []any {
@@ -245,6 +374,7 @@ func AllModels() []any {
 		&SystemMetric{},
 		&Incident{},
 		&FirewallRule{},
+		&HostFileBaseline{},
 	}
 }
 
