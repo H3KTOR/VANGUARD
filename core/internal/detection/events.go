@@ -19,6 +19,16 @@ const (
 	EventPortTouch      EventKind = "port_touch"
 	EventHTTPRequest    EventKind = "http_request"
 	EventHoneypotHit    EventKind = "honeypot_hit"
+
+	// EventHostSecurityFinding marks an Event synthesized from a
+	// internal/hostsec periodic scanner finding (FIM, Persistence,
+	// Account, Privilege Escalation, SUID/SGID -- Phase 1), rather than
+	// parsed from a tailed log line. It is never passed to handleEvent
+	// (see engine_hostsec.go's ReportHostFinding, which calls
+	// createIncident directly) -- this constant exists purely so the
+	// resulting Incident's evidence Event carries a self-describing Kind
+	// for any future code/tests that inspect it.
+	EventHostSecurityFinding EventKind = "host_security_finding"
 )
 
 // Event is the normalized representation of one observed occurrence,

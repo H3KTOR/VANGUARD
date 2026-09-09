@@ -38,12 +38,27 @@ import (
 type PersistenceDetector struct {
 	db       *database.DB
 	reporter Reporter
+	// root prefixes every absolute system path this detector reads
+	// (/etc/crontab, /etc/systemd/system, /etc/passwd, ...). Defaults to
+	// "" (i.e. the real host filesystem); unit tests set it to a tmpdir
+	// so the detector can be exercised against a synthetic filesystem
+	// without touching the real /etc.
+	root string
 }
 
 // NewPersistenceDetector constructs a Persistence Detector.
 func NewPersistenceDetector(db *database.DB, reporter Reporter) *PersistenceDetector {
 	return &PersistenceDetector{db: db, reporter: reporter}
 }
+
+// WithRoot returns a copy of d rooted at root, for tests only.
+func (d *PersistenceDetector) WithRoot(root string) *PersistenceDetector {
+	d2 := *d
+	d2.root = root
+	return &d2
+}
+
+func (d *PersistenceDetector) path(p string) string { return d.root + p }
 
 // Scan performs one full pass over every persistence source.
 func (d *PersistenceDetector) Scan(ctx context.Context) {
@@ -128,9 +143,9 @@ func (d *PersistenceDetector) diffLineFile(path, kind string, firstScan bool) {
 }
 
 func (d *PersistenceDetector) scanCron(firstScan bool) {
-	d.diffLineFile("/etc/crontab", "cron", firstScan)
+	d.diffLineFile(d.path("/etc/crontab"), "cron", firstScan)
 
-	entries, err := os.ReadDir("/etc/cron.d")
+	entries, err := os.ReadDir(d.path("/etc/cron.d"))
 	if err != nil {
 		return // absent cron.d is entirely normal, not an error worth logging
 	}
@@ -138,7 +153,7 @@ func (d *PersistenceDetector) scanCron(firstScan bool) {
 		if e.IsDir() {
 			continue
 		}
-		d.diffLineFile(filepath.Join("/etc/cron.d", e.Name()), "cron", firstScan)
+		d.diffLineFile(filepath.Join(d.path("/etc/cron.d"), e.Name()), "cron", firstScan)
 	}
 }
 
@@ -149,7 +164,7 @@ func (d *PersistenceDetector) scanCron(firstScan bool) {
 // answers "did anything in this directory change", Persistence answers
 // "is there a NEW service/timer that wasn't here before".
 func (d *PersistenceDetector) scanSystemdUnits(firstScan bool) {
-	entries, err := os.ReadDir("/etc/systemd/system")
+	entries, err := os.ReadDir(d.path("/etc/systemd/system"))
 	if err != nil {
 		return
 	}
@@ -177,7 +192,7 @@ func (d *PersistenceDetector) scanSystemdUnits(firstScan bool) {
 				Subject: name,
 				Details: map[string]any{
 					"unit": name,
-					"path": filepath.Join("/etc/systemd/system", name),
+					"path": filepath.Join(d.path("/etc/systemd/system"), name),
 				},
 			})
 		}
@@ -193,17 +208,20 @@ func (d *PersistenceDetector) scanSystemdUnits(firstScan bool) {
 // line -- a newly-appended public key is one of the most common real-world
 // persistence techniques after a successful compromise.
 func (d *PersistenceDetector) scanAuthorizedKeys(firstScan bool) {
-	for _, home := range homeDirectories() {
-		path := filepath.Join(home, ".ssh", "authorized_keys")
+	for _, home := range d.homeDirectories() {
+		// home is an absolute path parsed from /etc/passwd (e.g.
+		// "/home/alice"); it does not come back already rooted, so the
+		// detector's root prefix must be re-applied before joining.
+		path := filepath.Join(d.path(home), ".ssh", "authorized_keys")
 		d.diffLineFile(path, "authorized_keys", firstScan)
 	}
 }
 
 func (d *PersistenceDetector) scanShellStartupFiles(firstScan bool) {
 	for _, p := range thresholds.ShellStartupFiles {
-		d.diffLineFile(p, "shell_startup", firstScan)
+		d.diffLineFile(d.path(p), "shell_startup", firstScan)
 	}
-	entries, err := os.ReadDir("/etc/profile.d")
+	entries, err := os.ReadDir(d.path("/etc/profile.d"))
 	if err != nil {
 		return
 	}
@@ -211,13 +229,13 @@ func (d *PersistenceDetector) scanShellStartupFiles(firstScan bool) {
 		if e.IsDir() {
 			continue
 		}
-		d.diffLineFile(filepath.Join("/etc/profile.d", e.Name()), "shell_startup", firstScan)
+		d.diffLineFile(filepath.Join(d.path("/etc/profile.d"), e.Name()), "shell_startup", firstScan)
 	}
 }
 
 func (d *PersistenceDetector) scanSudoers(firstScan bool) {
-	d.diffLineFile("/etc/sudoers", "sudoers", firstScan)
-	entries, err := os.ReadDir("/etc/sudoers.d")
+	d.diffLineFile(d.path("/etc/sudoers"), "sudoers", firstScan)
+	entries, err := os.ReadDir(d.path("/etc/sudoers.d"))
 	if err != nil {
 		return
 	}
@@ -225,15 +243,15 @@ func (d *PersistenceDetector) scanSudoers(firstScan bool) {
 		if e.IsDir() {
 			continue
 		}
-		d.diffLineFile(filepath.Join("/etc/sudoers.d", e.Name()), "sudoers", firstScan)
+		d.diffLineFile(filepath.Join(d.path("/etc/sudoers.d"), e.Name()), "sudoers", firstScan)
 	}
 }
 
-// homeDirectories parses /etc/passwd and returns every account's home
-// directory field (column 6), used to locate each user's
+// homeDirectories parses /etc/passwd (rooted at d.root) and returns every
+// account's home directory field (column 6), used to locate each user's
 // ~/.ssh/authorized_keys without hardcoding a path list.
-func homeDirectories() []string {
-	f, err := os.Open("/etc/passwd")
+func (d *PersistenceDetector) homeDirectories() []string {
+	f, err := os.Open(d.path("/etc/passwd"))
 	if err != nil {
 		return nil
 	}

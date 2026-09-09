@@ -114,8 +114,20 @@ func (a *Autopilot) SetAlertNotifier(n AlertNotifier) {
 	a.alert = n
 }
 
+// alwaysWhitelistedIPs are seeded into the fail-safe whitelist on every
+// startup, unconditionally, regardless of cfg.AdminWhitelistIPs. Loopback
+// addresses must never be bannable: VANGUARD's Host Security scanners
+// (internal/hostsec, Mega Expansion Phase 1 -- FIM/Persistence/Account/
+// PrivEsc/SUID) raise incidents with SourceIP = database.HostLocalIP
+// ("127.0.0.1") for host-local findings that have no attacker IP to
+// attribute to, and a future misconfiguration (e.g. an operator setting
+// MinRiskScoreToBan very low) must never be able to turn "VANGUARD
+// detected a local file change" into "VANGUARD firewalls itself off from
+// its own loopback interface".
+var alwaysWhitelistedIPs = []string{database.HostLocalIP, "::1"}
+
 func (a *Autopilot) seedAdminWhitelist() {
-	for _, ip := range a.cfg.AdminWhitelistIPs {
+	for _, ip := range append(append([]string{}, alwaysWhitelistedIPs...), a.cfg.AdminWhitelistIPs...) {
 		if ip == "" {
 			continue
 		}

@@ -338,7 +338,7 @@ type HostFileBaseline struct {
 	ID uint `gorm:"primaryKey" json:"id"`
 
 	Category HostBaselineCategory `gorm:"size:32;not null;uniqueIndex:idx_hostbaseline_cat_key,priority:1" json:"category"`
-	Key      string                `gorm:"size:512;not null;uniqueIndex:idx_hostbaseline_cat_key,priority:2" json:"key"`
+	Key      string               `gorm:"size:512;not null;uniqueIndex:idx_hostbaseline_cat_key,priority:2" json:"key"`
 
 	Content string `gorm:"type:text" json:"content"`
 

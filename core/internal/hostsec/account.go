@@ -32,9 +32,9 @@ import (
 
 // passwdEntry is the subset of /etc/passwd fields this detector tracks.
 type passwdEntry struct {
-	UID  string `json:"uid"`
-	GID  string `json:"gid"`
-	Home string `json:"home,omitempty"`
+	UID   string `json:"uid"`
+	GID   string `json:"gid"`
+	Home  string `json:"home,omitempty"`
 	Shell string `json:"shell,omitempty"`
 }
 
@@ -48,12 +48,24 @@ type groupEntry struct {
 type AccountDetector struct {
 	db       *database.DB
 	reporter Reporter
+	// root prefixes /etc/passwd and /etc/group. Defaults to "" (the real
+	// host filesystem); unit tests set it to a tmpdir via WithRoot.
+	root string
 }
 
 // NewAccountDetector constructs an Account Manipulation Detector.
 func NewAccountDetector(db *database.DB, reporter Reporter) *AccountDetector {
 	return &AccountDetector{db: db, reporter: reporter}
 }
+
+// WithRoot returns a copy of a rooted at root, for tests only.
+func (a *AccountDetector) WithRoot(root string) *AccountDetector {
+	a2 := *a
+	a2.root = root
+	return &a2
+}
+
+func (a *AccountDetector) path(p string) string { return a.root + p }
 
 // Scan performs one full pass over /etc/passwd and /etc/group.
 func (a *AccountDetector) Scan(ctx context.Context) {
@@ -63,7 +75,7 @@ func (a *AccountDetector) Scan(ctx context.Context) {
 		return
 	}
 
-	users := parsePasswd()
+	users := parsePasswd(a.path("/etc/passwd"))
 	if len(users) == 0 {
 		// /etc/passwd was unreadable or genuinely empty (should never
 		// happen on a real Linux host). Bail out WITHOUT calling
@@ -82,7 +94,7 @@ func (a *AccountDetector) Scan(ctx context.Context) {
 		a.diffDeletedUsers(users, first)
 	}
 
-	groups := parseGroup()
+	groups := parseGroup(a.path("/etc/group"))
 	if len(groups) == 0 {
 		logf("account", "skipping group diff: /etc/group read returned zero entries")
 	} else {
@@ -278,8 +290,8 @@ func diffMembers(prev, curr []string) (added, removed []string) {
 // To guard against exactly that, an empty parse result on a NON-first
 // scan is treated as a read failure and skipped entirely by Scan's
 // caller-visible behavior: see the empty-map guard below.
-func parsePasswd() map[string]passwdEntry {
-	f, err := os.Open("/etc/passwd")
+func parsePasswd(path string) map[string]passwdEntry {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
@@ -302,8 +314,8 @@ func parsePasswd() map[string]passwdEntry {
 }
 
 // parseGroup reads /etc/group into name -> groupEntry.
-func parseGroup() map[string]groupEntry {
-	f, err := os.Open("/etc/group")
+func parseGroup(path string) map[string]groupEntry {
+	f, err := os.Open(path)
 	if err != nil {
 		return nil
 	}

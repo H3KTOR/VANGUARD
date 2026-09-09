@@ -133,6 +133,53 @@ func TestAdminWhitelistSeededOnStartup(t *testing.T) {
 	}
 }
 
+func TestHostLocalIPAlwaysWhitelisted(t *testing.T) {
+	// database.HostLocalIP (and ::1) must be whitelisted unconditionally,
+	// even with zero operator-configured AdminWhitelistIPs, so host-
+	// security findings (Mega Expansion Phase 1) can never trigger a
+	// self-ban -- see alwaysWhitelistedIPs' doc comment in autopilot.go.
+	cfg := DefaultConfig()
+	cfg.AdminWhitelistIPs = nil
+	a, db, _ := testAutopilot(t, cfg)
+	_ = a
+
+	for _, ip := range []string{database.HostLocalIP, "::1"} {
+		whitelisted, err := db.IsWhitelisted(ip)
+		if err != nil {
+			t.Fatalf("IsWhitelisted(%s) failed: %v", ip, err)
+		}
+		if !whitelisted {
+			t.Fatalf("expected %s to be unconditionally whitelisted on Autopilot construction", ip)
+		}
+	}
+}
+
+func TestHostLocalFindingNeverAutoBanned(t *testing.T) {
+	// End-to-end fail-safe check: an incident sourced at HostLocalIP with
+	// a CRITICAL risk score must never result in an actual ban, mirroring
+	// TestAutopilotNeverBansWhitelistedIP but for the host-security path.
+	cfg := DefaultConfig()
+	a, db, exec := testAutopilot(t, cfg)
+
+	inc := &database.Incident{
+		Type: database.IncidentPrivilegeEscalation, SourceIP: database.HostLocalIP,
+		RiskScore: 95, Severity: database.SeverityCritical, Status: database.StatusOpen,
+	}
+	if err := db.CreateIncident(inc); err != nil {
+		t.Fatalf("failed to create incident: %v", err)
+	}
+
+	a.OnIncident(inc)
+
+	if exec.Blocked[database.HostLocalIP] {
+		t.Fatalf("fail-safe violated: HostLocalIP was blocked despite CRITICAL risk score")
+	}
+	banned, _ := db.IsBanned(database.HostLocalIP)
+	if banned {
+		t.Fatalf("fail-safe violated: HostLocalIP has an active ban record")
+	}
+}
+
 func TestTTLBanExpiresAndIsReaped(t *testing.T) {
 	cfg := DefaultConfig()
 	a, db, exec := testAutopilot(t, cfg)

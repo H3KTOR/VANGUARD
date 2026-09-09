@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"vanguard/core/internal/thresholds"
 )
 
 // serveConfig holds every tunable for `vanguard serve`. Flags take
@@ -42,6 +44,13 @@ type serveConfig struct {
 	ReapInterval time.Duration
 
 	ShutdownTimeout time.Duration
+
+	// --- Host Security (Mega Expansion, Phase 1): FIM, Persistence,
+	// Account, Privilege Escalation, SUID/SGID scanners. See
+	// internal/hostsec/manager.go. ---
+	EnableHostSecurity bool
+	FIMPaths           []string
+	SUIDScanRoots      []string
 
 	// TelegramBotToken / TelegramChatID enable real-time push alerts when
 	// Autopilot bans an IP. Both env-var only (never a CLI flag) since
@@ -85,6 +94,10 @@ func parseServeFlags(args []string) serveConfig {
 
 	shutdownTimeout := fs.Duration("shutdown-timeout", 15*time.Second, "Maximum time to let in-flight HTTP requests finish during graceful shutdown")
 
+	enableHostSecurity := fs.Bool("hostsec", true, "Enable Host Security scanners (FIM, Persistence, Account, Privilege Escalation, SUID/SGID monitoring)")
+	fimPaths := fs.String("fim-paths", envOr("VANGUARD_FIM_PATHS", ""), "Comma-separated list of additional sensitive files/directories for File Integrity Monitoring (appended to the built-in defaults)")
+	suidRoots := fs.String("suid-roots", envOr("VANGUARD_SUID_ROOTS", ""), "Comma-separated list of additional directories to scan for SUID/SGID binaries (appended to the built-in defaults)")
+
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -116,6 +129,10 @@ func parseServeFlags(args []string) serveConfig {
 		ShutdownTimeout:  *shutdownTimeout,
 		TelegramBotToken: telegramBotToken,
 		TelegramChatID:   telegramChatID,
+
+		EnableHostSecurity: *enableHostSecurity,
+		FIMPaths:           append(append([]string{}, thresholds.DefaultFIMPaths...), splitAndTrim(*fimPaths)...),
+		SUIDScanRoots:      append(append([]string{}, thresholds.DefaultSUIDScanRoots...), splitAndTrim(*suidRoots)...),
 	}
 
 	if cfg.JWTSecret == "" {

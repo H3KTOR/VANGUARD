@@ -8,7 +8,7 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 
 > **Deployment note**: VANGUARD is a traditional host-based Linux daemon (log tailing, raw sockets for the honeypot, direct UFW/iptables execution, an embedded static dashboard). It is **not** a Cloudflare Pages/Workers application — there is no serverless deployment story for this project. It is built, tested, and run directly in this sandbox (a Linux environment) and is intended to ultimately run as a systemd service on a real Linux host.
 
-## Current Status: Steps 1–5 + Attack Correlation Engine + Automated Security Test Lab Complete
+## Current Status: Steps 1–5 + Attack Correlation Engine + Automated Security Test Lab + VANGUARD Mega Expansion Phase 1 (Host Security) Complete
 
 ### ✅ Completed
 
@@ -68,6 +68,18 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 - **Verified end-to-end in this sandbox**: `docker compose build/up victim` → healthy in ~15s; `docker compose run --rm attacker ./run-tests.sh` → **8/8 PASS**, including `attack_chain` at risk=100/100 CRITICAL, and confirmed the Autopilot auto-banned the attacker IP (`GET /api/firewall/rules` shows an active `autopilot`-sourced ban) exactly as the honeypot-trigger's CRITICAL severity should trigger.
 - Building this lab surfaced and fixed one real bug in `ChainTracker.Evaluate()` (the sub-second-precision sequencing issue described above) — not a lab-only artifact; it could affect any real fast, tightly-sequenced attack in production too.
 
+**`core/internal/hostsec`** (VANGUARD Mega Expansion, Phase 1) — five periodic, zero-dependency Host Security scanners, each following the mandated Detection → Evidence → Risk → Correlation → Response pipeline and routing through the exact same `createIncident()` choke point as every log-driven rule (via `internal/detection.Engine.ReportHostFinding`, which implements `hostsec.Reporter` — see `engine_hostsec.go`), so there is zero duplicated detection/persistence logic:
+- **File Integrity Monitoring** (`fim.go`) — SHA-256/size/mode/owner/group snapshot of sensitive paths (`/etc/passwd`, `/etc/shadow`, `/etc/sudoers[.d]`, `/etc/ssh/sshd_config`, `/root/.ssh/authorized_keys`, `/etc/crontab`, `/etc/cron.d`, `/etc/systemd/system`); any change to `/etc/shadow` or root's `authorized_keys` is auto-CRITICAL.
+- **Persistence Detection** (`persistence.go`) — line-diffs cron, systemd units, every local user's SSH `authorized_keys`, shell startup files, and sudoers for newly-added entries.
+- **Privilege Escalation Detection** (`privesc.go`) — flags new UID-0 accounts, new membership in privileged groups (sudo/wheel/root/adm/docker/shadow/disk), dangerous sudoers rules (NOPASSWD / blanket `ALL=(ALL)`), and a **BEST-EFFORT DETECTION** (explicitly labeled per the no-eBPF/no-kernel-module architectural constraint) periodic `/proc` scan for unexpected root-owned processes outside standard system paths.
+- **Account Manipulation Detection** (`account.go`) — diffs `/etc/passwd`/`/etc/group` for created/deleted users and groups, UID/GID changes, and group-membership changes; guards against ever misreporting "every account deleted" if `/etc/passwd` becomes unreadable.
+- **SUID/SGID Monitoring** (`suid.go`) — walks standard binary directories plus `/tmp`, `/var/tmp`, `/dev/shm` for setuid/setgid binaries; any new SUID/SGID binary found under a world-writable/temp directory is auto-CRITICAL.
+- All five share a generic `database.HostFileBaseline` table (partitioned by category, JSON content blob) and a cold-start "first-scan seeding" pattern (`isFirstScan`/`markSeeded`) so a fresh install never floods incidents for pre-existing system state — only genuinely new changes after the first pass are ever reported.
+- Host-security incidents have no attacker IP, so they're recorded with the sentinel `SourceIP = database.HostLocalIP` (`127.0.0.1`), which — along with `::1` — is now unconditionally seeded into Autopilot's fail-safe whitelist on every startup regardless of operator config, guaranteeing these findings can never trigger an accidental self-ban.
+- Orchestrated by `hostsec.Manager` (`manager.go`), wired into `vanguard serve`'s background task set; each scanner runs on its own ticker (FIM/PrivEsc every 2 min, Persistence/Account every 3 min, SUID every 10 min) with a bounded 30s timeout per scan tick. Controlled via new CLI flags: `-hostsec` (bool, default `true`), `-fim-paths` / `-suid-roots` (comma-separated extra paths, env `VANGUARD_FIM_PATHS` / `VANGUARD_SUID_ROOTS`).
+- 26 new Go unit tests (`internal/hostsec/*_test.go`, `internal/detection/engine_hostsec_test.go`, plus 2 new fail-safe tests in `internal/firewall/autopilot_test.go`) cover cold-start seeding silence, every change type per scanner, the SUID writable-dir CRITICAL escalation, the account empty-map read-failure guard, the sudo-group-rule non-flagging, and the HostLocalIP fail-safe whitelist/no-self-ban guarantee.
+- Not yet wired into this phase: Docker lab attack scenarios for these 5 detectors, and a dedicated dashboard summary widget (the generic `/api/incidents?type=...` feed already surfaces all 5 new incident types with no API changes needed).
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.
@@ -75,7 +87,9 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 ### Next Steps
 1. Visual QA pass against the original reference design once available.
 2. Triage npm audit findings; consider further code-splitting if bundle size becomes a concern.
-3. Check in with the project owner on what's next — no further task has been authorized beyond the Automated Security Test Lab.
+3. Add Docker lab attack scenarios exercising the 5 new Host Security detectors end-to-end (extending `lab/run-tests.sh` / `lab/victim/entrypoint.sh`).
+4. Continue into VANGUARD Mega Expansion Phase 2 (Process→File→Network Correlation) and onward through the remaining phases of the mega-prompt's recommended implementation order.
+5. **Known pre-existing issue (not introduced by Phase 1)**: `go test -race ./...` flags a data race in `internal/firewall.MockExecutor` (unsynchronized map/bool field access from `TestPanicModeAutoRollbackFiresAfterTimeout`'s background auto-rollback goroutine vs. the main test goroutine) — confirmed present before any Phase 1 changes (reproduced against the prior commit). `go test ./...` (without `-race`) passes cleanly. Should be fixed by adding a `sync.Mutex` to `MockExecutor` in a future pass.
 
 ## Try It
 

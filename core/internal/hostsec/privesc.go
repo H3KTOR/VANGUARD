@@ -58,12 +58,26 @@ var expectedRootProcessPaths = []string{
 type PrivEscDetector struct {
 	db       *database.DB
 	reporter Reporter
+	// root prefixes /etc/passwd, /etc/group and /etc/sudoers[.d] (but NOT
+	// /proc, which is not meaningfully fakeable under a tmpdir root -- the
+	// best-effort root-process scan is exercised via other means). Defaults
+	// to "" (the real host filesystem); unit tests set it via WithRoot.
+	root string
 }
 
 // NewPrivEscDetector constructs a Privilege Escalation Detector.
 func NewPrivEscDetector(db *database.DB, reporter Reporter) *PrivEscDetector {
 	return &PrivEscDetector{db: db, reporter: reporter}
 }
+
+// WithRoot returns a copy of p rooted at root, for tests only.
+func (p *PrivEscDetector) WithRoot(root string) *PrivEscDetector {
+	p2 := *p
+	p2.root = root
+	return &p2
+}
+
+func (p *PrivEscDetector) path(s string) string { return p.root + s }
 
 // Scan performs one full pass across all four signals.
 func (p *PrivEscDetector) Scan(ctx context.Context) {
@@ -98,7 +112,7 @@ func (p *PrivEscDetector) Scan(ctx context.Context) {
 // isn't "root" -- a classic privilege-escalation persistence technique
 // (creating a second root-equivalent account).
 func (p *PrivEscDetector) scanUID0Accounts(firstScan bool) {
-	users := parsePasswd()
+	users := parsePasswd(p.path("/etc/passwd"))
 	if len(users) == 0 {
 		return
 	}
@@ -137,7 +151,7 @@ func (p *PrivEscDetector) scanUID0Accounts(firstScan bool) {
 // is specifically privilege-escalation-relevant evidence, worth its own
 // signature and its own (higher) base severity.
 func (p *PrivEscDetector) scanPrivilegedGroups(firstScan bool) {
-	groups := parseGroup()
+	groups := parseGroup(p.path("/etc/group"))
 	if len(groups) == 0 {
 		return
 	}
@@ -178,8 +192,8 @@ func (p *PrivEscDetector) scanPrivilegedGroups(firstScan bool) {
 // "ALL=(ALL) ALL"/"ALL=(ALL:ALL) ALL" rule for anyone other than the
 // standard %sudo/%wheel groups (which are expected to have it).
 func (p *PrivEscDetector) scanSudoersRules(firstScan bool) {
-	p.diffSudoersFile("/etc/sudoers", firstScan)
-	entries, err := os.ReadDir("/etc/sudoers.d")
+	p.diffSudoersFile(p.path("/etc/sudoers"), firstScan)
+	entries, err := os.ReadDir(p.path("/etc/sudoers.d"))
 	if err != nil {
 		return
 	}
@@ -187,7 +201,7 @@ func (p *PrivEscDetector) scanSudoersRules(firstScan bool) {
 		if e.IsDir() {
 			continue
 		}
-		p.diffSudoersFile(filepath.Join("/etc/sudoers.d", e.Name()), firstScan)
+		p.diffSudoersFile(filepath.Join(p.path("/etc/sudoers.d"), e.Name()), firstScan)
 	}
 }
 

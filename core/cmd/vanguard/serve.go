@@ -25,6 +25,7 @@ import (
 	"vanguard/core/internal/detection"
 	"vanguard/core/internal/firewall"
 	"vanguard/core/internal/honeypot"
+	"vanguard/core/internal/hostsec"
 	"vanguard/core/internal/metrics"
 	"vanguard/core/internal/notify"
 	"vanguard/core/internal/simulator"
@@ -62,6 +63,7 @@ type app struct {
 	executor   firewall.Executor
 	collector  *metrics.Collector
 	honeypotS  *honeypot.Server
+	hostsecM   *hostsec.Manager
 	echoSrv    *api.Server
 	echoHandle *echo.Echo // set once startHTTPServer runs; used by shutdown()
 
@@ -131,6 +133,17 @@ func buildApp(cfg serveConfig) (*app, error) {
 		})
 	}
 
+	// --- 5b. Host Security scanners (Mega Expansion, Phase 1): FIM,
+	// Persistence, Account, Privilege Escalation, SUID/SGID. The Engine
+	// itself implements hostsec.Reporter (see engine_hostsec.go), so
+	// every finding flows into the exact same Incident/risk pipeline as
+	// every log-driven rule. ---
+	hostsecMgr := hostsec.NewManager(db, engine, hostsec.Config{
+		FIMPaths:  cfg.FIMPaths,
+		SUIDRoots: cfg.SUIDScanRoots,
+		Enabled:   cfg.EnableHostSecurity,
+	})
+
 	// --- 6. Auth manager + REST API. ---
 	authMgr, err := auth.NewManager(cfg.JWTSecret, cfg.JWTTTL)
 	if err != nil {
@@ -155,6 +168,7 @@ func buildApp(cfg serveConfig) (*app, error) {
 		executor:  executor,
 		collector: collector,
 		honeypotS: honeypotSrv,
+		hostsecM:  hostsecMgr,
 		echoSrv:   echoSrv,
 	}, nil
 }
@@ -235,6 +249,19 @@ func (a *app) startBackgroundTasks(ctx context.Context) {
 		})
 	} else {
 		log.Println("[serve] honeypot listeners disabled (-honeypot=false)")
+	}
+
+	// --- Host Security scanners: each of the five (FIM, Persistence,
+	// Account, Privilege Escalation, SUID/SGID) runs on its own ticker
+	// inside Manager.Run, which blocks until ctx is cancelled -- tracked
+	// here as a single unit of work, exactly like the honeypot server
+	// above. ---
+	if a.cfg.EnableHostSecurity {
+		a.goTracked(func() {
+			a.hostsecM.Run(ctx)
+		})
+	} else {
+		log.Println("[serve] Host Security scanners disabled (-hostsec=false)")
 	}
 
 	// --- Autopilot maintenance loop: periodically reaps expired TTL bans
