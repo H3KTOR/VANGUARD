@@ -130,7 +130,7 @@ func TestFIMWatcher_CriticalEscalationForShadow(t *testing.T) {
 	// non-existent /etc/shadow-like path with that exact key would report
 	// Critical=true when a change fires. We simulate by calling report
 	// directly, which is what scanOne delegates to.
-	w.report("/etc/shadow", "modified", fileMeta{Exists: true, Hash: "a"}, fileMeta{Exists: true, Hash: "b"})
+	w.w.report("/etc/shadow", "modified", fileMeta{Exists: true, Hash: "a"}, fileMeta{Exists: true, Hash: "b"})
 	if len(rep.findings) != 1 {
 		t.Fatalf("expected 1 finding, got %d", len(rep.findings))
 	}

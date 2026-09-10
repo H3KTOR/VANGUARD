@@ -52,6 +52,12 @@ var BaseSeverity = map[database.IncidentType]int{
 	database.IncidentPrivilegeEscalation: 65, // HIGH tier: privilege escalation indicator
 	database.IncidentAccountChange:       50, // MEDIUM/HIGH boundary: account/group mutation
 	database.IncidentSUIDSGIDAnomaly:     55, // HIGH tier; Escalate bumps to CRITICAL if in a writable dir
+
+	// --- Host Security Phase 2 (Process/File/Network Correlation, System
+	// Binary Integrity) ---
+	database.IncidentSuspiciousProcess:        50, // MEDIUM/HIGH boundary: best-effort userspace signal, deliberately not as high-confidence as the Phase 1 signatures
+	database.IncidentSystemBinaryIntegrity:    70, // HIGH tier: a replaced security-critical executable is a strong post-compromise indicator
+	database.IncidentHighConfidenceCompromise: 85, // CRITICAL tier: correlated process+file(+network/threat-intel) evidence -- VANGUARD's second-most-severe signature after IncidentAttackChain
 }
 
 // Breakdown documents how a RiskScore was derived. Every detector (real or

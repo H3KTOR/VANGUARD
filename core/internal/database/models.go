@@ -107,6 +107,57 @@ const (
 	// directory whose own mode is world-writable) -- a classic
 	// privilege-escalation-via-dropped-SUID-binary pattern.
 	IncidentSUIDSGIDAnomaly IncidentType = "suid_sgid_anomaly"
+
+	// -----------------------------------------------------------------
+	// Phase 2 signatures (VANGUARD Mega Expansion): Process Anomaly
+	// Detection, Process->File->Network Correlation, System Binary
+	// Integrity. Like the Phase 1 signatures above, these are host-local
+	// (SourceIP = HostLocalIP) with one exception: IncidentHighConfidenceCompromise
+	// carries whatever remote IP triggered its network leg (a genuine
+	// attacker/C2 IP, not host-local), since that IP IS meaningful
+	// evidence -- Autopilot can safely act on it exactly like any other
+	// network-sourced incident.
+	// -----------------------------------------------------------------
+
+	// IncidentSuspiciousProcess: BEST-EFFORT DETECTION (periodic /proc
+	// snapshot only, no eBPF/kernel visibility -- see hostsec/process.go's
+	// doc comment). Raised for a process whose executable has been
+	// unlinked from disk while still running ("(deleted)" in
+	// /proc/<pid>/exe -- classic fileless-malware/rootkit evasion), a
+	// process executing from a world-writable/temp directory, a
+	// suspicious parent-child relationship (a shell/interpreter spawned
+	// by a network-facing service such as nginx/sshd/mysqld), or an
+	// abnormal burst of new process creation within one scan interval.
+	// Deliberately does NOT duplicate PrivEsc's own "unexpected root
+	// process" check (database.IncidentPrivilegeEscalation) -- see that
+	// type's doc comment -- to avoid two detectors raising overlapping
+	// signatures for the same underlying evidence.
+	IncidentSuspiciousProcess IncidentType = "suspicious_process"
+
+	// IncidentHighConfidenceCompromise: a correlation (internal/detection's
+	// ProcessNetCorrelator, mirroring ChainTracker's shape) of a
+	// Suspicious Process finding with at least one of (a) a recent
+	// sensitive-file FIM change or (b) that same process owning an
+	// outbound connection to an IP flagged by Threat Intelligence, within
+	// a bounded window. This is VANGUARD's second-most-severe signature
+	// after IncidentAttackChain (which correlates network-only signals);
+	// this one additionally incorporates host-local process/file
+	// evidence, which is why it carries its own elevated base severity
+	// (see risk.BaseSeverity) rather than reusing ScoreChain's aggregate-
+	// then-multiply formula.
+	IncidentHighConfidenceCompromise IncidentType = "high_confidence_compromise"
+
+	// IncidentSystemBinaryIntegrity: a security-critical system binary's
+	// SHA-256/size/mode/owner/group changed relative to its last-known
+	// baseline (created/deleted/modified/perm_changed/owner_changed/
+	// group_changed). Distinct from IncidentFIMChange (which watches
+	// config files, not executables) per the mega-prompt's explicit
+	// feature split; internally reuses the exact same statFile/
+	// compareMeta/fileMeta diff helpers FIMWatcher already uses (see
+	// hostsec/hostsec.go), just against a different target list and its
+	// own baseline category/incident type -- not a second, independent
+	// detection engine.
+	IncidentSystemBinaryIntegrity IncidentType = "system_binary_integrity_violation"
 )
 
 // HostLocalIP is the sentinel SourceIP value used for every host-security
@@ -318,6 +369,22 @@ const (
 	// "uid0:root", "sudoers_rule:<hash>", "root_proc:<exe-path>"). See
 	// hostsec/privesc.go for exact key shapes.
 	BaselinePrivEsc HostBaselineCategory = "privesc"
+	// BaselineSystemBinary: Category=system_binary, Key=absolute binary
+	// path. One row per path in the System Binary Integrity watch list
+	// (Phase 2, feature 8) -- kept as its own category (rather than
+	// reusing BaselineFIM) since it is a distinct feature/incident type
+	// per the mega-prompt's explicit split between config-file FIM and
+	// executable integrity.
+	BaselineSystemBinary HostBaselineCategory = "system_binary"
+	// BaselineProcess: Category=process, Key=a stable identifier for one
+	// process-anomaly-relevant fact (e.g. "deleted_exe:/tmp/x",
+	// "unusual_dir:/dev/shm/payload", "parent_child:nginx:bash"). See
+	// hostsec/process.go for exact key shapes. Deliberately dedupes on
+	// the underlying FACT (a specific exe path, or a specific
+	// parent/child executable pairing) rather than on ephemeral PID, so
+	// the same short-lived process pattern recurring doesn't flood
+	// incidents once it has already been reported.
+	BaselineProcess HostBaselineCategory = "process"
 )
 
 // HostFileBaseline is a single last-known-good snapshot used by the Host

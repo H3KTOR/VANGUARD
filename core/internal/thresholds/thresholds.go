@@ -232,3 +232,67 @@ var ShellStartupFiles = []string{
 var PrivilegedGroups = []string{
 	"sudo", "wheel", "root", "adm", "docker", "shadow", "disk",
 }
+
+// --- Host Security Phase 2 (VANGUARD Mega Expansion): Process Anomaly
+// Detection, Process->File->Network Correlation, System Binary Integrity
+// (features 6, 7, 8). Same no-eBPF/periodic-/proc-scan constraints as
+// Phase 1 above.
+
+const (
+	// ProcessScanInterval is how often /proc is walked to rebuild the
+	// process inventory and diff it against the previous scan.
+	ProcessScanInterval = 1 * time.Minute
+
+	// BinaryIntegrityScanInterval is how often the System Binary
+	// Integrity watcher re-hashes its configured binary paths. Kept at
+	// the same cadence as FIMScanInterval since it uses the identical
+	// underlying diff mechanics.
+	BinaryIntegrityScanInterval = 2 * time.Minute
+
+	// ProcessCreationBurstThreshold: more than this many brand-new PIDs
+	// observed in a single ProcessScanInterval tick is treated as an
+	// "abnormal process creation burst" (e.g. a fork-bomb, a script
+	// spawning many short-lived children, or automated post-exploitation
+	// tooling). Deliberately generous -- a busy but legitimate host
+	// (package manager runs, cron bursts) can easily spawn a few dozen
+	// processes in a minute; this threshold targets a genuine anomaly,
+	// not routine churn.
+	ProcessCreationBurstThreshold = 60
+
+	// HostCorrelationWindow bounds how far apart in time a Suspicious
+	// Process finding (with a confirmed malicious-reputation outbound
+	// connection) and a sensitive-file FIM change may be while still
+	// counting as the same compromise event for
+	// IncidentHighConfidenceCompromise (feature 7).
+	HostCorrelationWindow = 10 * time.Minute
+)
+
+// NetworkFacingServiceNames are process executable basenames considered
+// "network-facing" for the suspicious-parent-child heuristic: a shell or
+// interpreter spawned by one of these is a classic post-exploitation
+// pattern (e.g. a web server executing a reverse-shell payload after a
+// successful RCE).
+var NetworkFacingServiceNames = []string{
+	"nginx", "httpd", "apache2", "sshd", "mysqld", "mariadbd", "postgres",
+	"php-fpm", "vsftpd", "proftpd", "redis-server", "memcached",
+}
+
+// ShellAndInterpreterNames are process executable basenames considered
+// "unexpected children" of a network-facing service in the suspicious
+// parent-child heuristic.
+var ShellAndInterpreterNames = []string{
+	"sh", "bash", "dash", "zsh", "ash", "python", "python3", "perl", "ruby",
+	"nc", "ncat", "netcat", "socat", "curl", "wget", "php",
+}
+
+// DefaultSystemBinaryPaths are the security-critical executables watched
+// by the System Binary Integrity scanner (feature 8) out of the box.
+// Deliberately a small, bounded list of the highest-value targets rather
+// than every file under /bin -- per the mega-prompt's explicit "do not
+// hash the entire filesystem by default" instruction. Operators can
+// extend this via -binary-paths.
+var DefaultSystemBinaryPaths = []string{
+	"/bin/sh", "/bin/bash", "/usr/bin/sudo", "/usr/bin/su",
+	"/usr/sbin/sshd", "/usr/bin/passwd", "/usr/bin/ssh",
+	"/usr/bin/curl", "/usr/bin/wget", "/usr/bin/nc",
+}
