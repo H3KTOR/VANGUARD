@@ -133,15 +133,17 @@ func buildApp(cfg serveConfig) (*app, error) {
 		})
 	}
 
-	// --- 5b. Host Security scanners (Mega Expansion, Phase 1): FIM,
-	// Persistence, Account, Privilege Escalation, SUID/SGID. The Engine
+	// --- 5b. Host Security scanners (Mega Expansion, Phase 1: FIM,
+	// Persistence, Account, Privilege Escalation, SUID/SGID; Phase 2:
+	// Process Anomaly Detection, System Binary Integrity). The Engine
 	// itself implements hostsec.Reporter (see engine_hostsec.go), so
 	// every finding flows into the exact same Incident/risk pipeline as
 	// every log-driven rule. ---
 	hostsecMgr := hostsec.NewManager(db, engine, hostsec.Config{
-		FIMPaths:  cfg.FIMPaths,
-		SUIDRoots: cfg.SUIDScanRoots,
-		Enabled:   cfg.EnableHostSecurity,
+		FIMPaths:    cfg.FIMPaths,
+		SUIDRoots:   cfg.SUIDScanRoots,
+		BinaryPaths: cfg.BinaryPaths,
+		Enabled:     cfg.EnableHostSecurity,
 	})
 
 	// --- 6. Auth manager + REST API. ---

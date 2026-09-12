@@ -56,6 +56,7 @@ type Engine struct {
 	dedupe  *dedupeWindow
 	chain   *ChainTracker   // Task 3: cross-signal attack-chain correlation state
 	scanner *ScannerTracker // Task 3: web-scanner-behavior heuristic state
+	hostCor *HostCorrelator // Mega Expansion Phase 2, Feature 7: process/file/network correlation state
 }
 
 // Config controls Engine construction.
@@ -93,6 +94,7 @@ func NewEngine(cfg Config) *Engine {
 		dedupe:  newDedupeWindow(2 * time.Minute),
 		chain:   NewChainTracker(cfg.MaxIdle),
 		scanner: NewScannerTracker(cfg.MaxIdle),
+		hostCor: NewHostCorrelator(),
 	}
 }
 

@@ -71,9 +71,18 @@ type Finding struct {
 
 	// BestEffort marks findings from a detector that cannot be fully
 	// reliable under the no-eBPF/no-kernel-module constraint (currently
-	// only the PrivEsc scanner's root-process check). Surfaced in
-	// Details so the dashboard/analyst can weight confidence accordingly.
+	// the PrivEsc scanner's root-process check and the whole of Feature 6,
+	// Process Anomaly Detection). Surfaced in Details so the
+	// dashboard/analyst can weight confidence accordingly.
 	BestEffort bool
+
+	// RemoteAddrs carries any outbound "ip:port" connections discovered
+	// for the subject of this finding (currently populated only by
+	// Feature 6's ProcessDetector, from its best-effort /proc/net/tcp
+	// association -- see process.go's ProcessInfo.RemoteAddrs). Consumed
+	// by Feature 7's correlateHostFinding to check each address against
+	// Threat Intelligence. Empty for every other scanner.
+	RemoteAddrs []string
 
 	// Details carries every other scanner-specific field (previous/
 	// current hash, mode, uid/gid, matched line, etc) for the incident's

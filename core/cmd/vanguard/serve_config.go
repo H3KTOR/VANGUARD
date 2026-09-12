@@ -51,6 +51,12 @@ type serveConfig struct {
 	EnableHostSecurity bool
 	FIMPaths           []string
 	SUIDScanRoots      []string
+	// BinaryPaths (Mega Expansion, Phase 2, Feature 8: System Binary
+	// Integrity). Kept separate from FIMPaths even though both feed the
+	// same underlying pathBaselineWatcher engine, since they are
+	// conceptually distinct operator-tunable lists (sensitive config vs.
+	// security-critical executables) with independent defaults.
+	BinaryPaths []string
 
 	// TelegramBotToken / TelegramChatID enable real-time push alerts when
 	// Autopilot bans an IP. Both env-var only (never a CLI flag) since
@@ -97,6 +103,7 @@ func parseServeFlags(args []string) serveConfig {
 	enableHostSecurity := fs.Bool("hostsec", true, "Enable Host Security scanners (FIM, Persistence, Account, Privilege Escalation, SUID/SGID monitoring)")
 	fimPaths := fs.String("fim-paths", envOr("VANGUARD_FIM_PATHS", ""), "Comma-separated list of additional sensitive files/directories for File Integrity Monitoring (appended to the built-in defaults)")
 	suidRoots := fs.String("suid-roots", envOr("VANGUARD_SUID_ROOTS", ""), "Comma-separated list of additional directories to scan for SUID/SGID binaries (appended to the built-in defaults)")
+	binaryPaths := fs.String("binary-paths", envOr("VANGUARD_BINARY_PATHS", ""), "Comma-separated list of additional security-critical binaries for System Binary Integrity monitoring (appended to the built-in defaults)")
 
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
@@ -133,6 +140,7 @@ func parseServeFlags(args []string) serveConfig {
 		EnableHostSecurity: *enableHostSecurity,
 		FIMPaths:           append(append([]string{}, thresholds.DefaultFIMPaths...), splitAndTrim(*fimPaths)...),
 		SUIDScanRoots:      append(append([]string{}, thresholds.DefaultSUIDScanRoots...), splitAndTrim(*suidRoots)...),
+		BinaryPaths:        append(append([]string{}, thresholds.DefaultSystemBinaryPaths...), splitAndTrim(*binaryPaths)...),
 	}
 
 	if cfg.JWTSecret == "" {

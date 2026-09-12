@@ -147,7 +147,7 @@ func (d *ProcessDetector) detectDeletedExe(procs []ProcessInfo, firstScan bool) 
 // same classic drop-and-execute location the SUID monitor watches.
 func (d *ProcessDetector) detectUnusualDir(procs []ProcessInfo, firstScan bool) {
 	for _, p := range procs {
-		if p.Exe == "" || p.Deleted {
+		if p.Exe == "" {
 			continue
 		}
 		for _, root := range thresholds.WritableScanRoots {
@@ -251,6 +251,7 @@ func (d *ProcessDetector) reportOncePerPID(p ProcessInfo, reason string, critica
 			Critical:       critical,
 			BestEffort:     true,
 			EscalationNote: note,
+			RemoteAddrs:    p.RemoteAddrs,
 			Details: map[string]any{
 				"pid": p.PID, "ppid": p.PPID, "uid": p.UID, "comm": p.Comm, "exe": p.Exe,
 				"remote_addrs": p.RemoteAddrs,

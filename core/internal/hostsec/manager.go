@@ -1,6 +1,8 @@
 package hostsec
 
-// manager.go bundles all five Phase 1 Host Security scanners behind a
+// manager.go bundles every Host Security scanner -- the five Phase 1
+// scanners (FIM, Persistence, Account, PrivEsc, SUID/SGID) plus Phase 2's
+// Process Anomaly Detection and System Binary Integrity -- behind a
 // single Run(ctx) entry point, mirroring internal/metrics.Collector's own
 // Run(ctx)-on-ticker shape so cmd/vanguard/serve.go can wire this in with
 // the exact same goTracked(...) pattern used for every other background
@@ -29,6 +31,12 @@ type Config struct {
 	// regardless of this override, since the writable-dir escalation
 	// check depends on it).
 	SUIDRoots []string
+	// BinaryPaths overrides thresholds.DefaultSystemBinaryPaths when
+	// non-empty (Phase 2, Feature 8: System Binary Integrity). Kept as an
+	// explicit small allowlist, never a filesystem walk of /bin, /sbin,
+	// /usr/bin, /usr/sbin wholesale, per the mega-prompt's own "do not
+	// hash the entire filesystem by default" constraint.
+	BinaryPaths []string
 
 	// Enabled toggles the whole Host Security subsystem. Defaults to
 	// true; operators on a non-Linux dev sandbox or a container without
@@ -39,13 +47,14 @@ type Config struct {
 // DefaultConfig returns the out-of-the-box scan target lists.
 func DefaultConfig() Config {
 	return Config{
-		FIMPaths:  thresholds.DefaultFIMPaths,
-		SUIDRoots: thresholds.DefaultSUIDScanRoots,
-		Enabled:   true,
+		FIMPaths:    thresholds.DefaultFIMPaths,
+		SUIDRoots:   thresholds.DefaultSUIDScanRoots,
+		BinaryPaths: thresholds.DefaultSystemBinaryPaths,
+		Enabled:     true,
 	}
 }
 
-// Manager owns all five Host Security scanners and their independent
+// Manager owns every Host Security scanner and their independent
 // scan-interval tickers.
 type Manager struct {
 	cfg Config
@@ -55,6 +64,8 @@ type Manager struct {
 	account     *AccountDetector
 	privesc     *PrivEscDetector
 	suid        *SUIDMonitor
+	process     *ProcessDetector        // Phase 2, Feature 6
+	binaries    *BinaryIntegrityWatcher // Phase 2, Feature 8
 }
 
 // NewManager constructs every scanner, wiring reporter as the sink for
@@ -74,6 +85,11 @@ func NewManager(db *database.DB, reporter Reporter, cfg Config) *Manager {
 	// CRITICAL escalation rule depends on having actually looked there.
 	suidRoots = append(append([]string{}, suidRoots...), thresholds.WritableScanRoots...)
 
+	binaryPaths := cfg.BinaryPaths
+	if len(binaryPaths) == 0 {
+		binaryPaths = thresholds.DefaultSystemBinaryPaths
+	}
+
 	return &Manager{
 		cfg:         cfg,
 		fim:         NewFIMWatcher(db, reporter, fimPaths),
@@ -81,6 +97,8 @@ func NewManager(db *database.DB, reporter Reporter, cfg Config) *Manager {
 		account:     NewAccountDetector(db, reporter),
 		privesc:     NewPrivEscDetector(db, reporter),
 		suid:        NewSUIDMonitor(db, reporter, suidRoots),
+		process:     NewProcessDetector(db, reporter),
+		binaries:    NewBinaryIntegrityWatcher(db, reporter, binaryPaths),
 	}
 }
 
@@ -121,6 +139,8 @@ func (m *Manager) Run(ctx context.Context) {
 		{"account", thresholds.AccountScanInterval, m.account.Scan},
 		{"privesc", thresholds.PrivEscScanInterval, m.privesc.Scan},
 		{"suid", thresholds.SUIDScanInterval, m.suid.Scan},
+		{"process", thresholds.ProcessScanInterval, m.process.Scan},
+		{"binary_integrity", thresholds.BinaryIntegrityScanInterval, m.binaries.Scan},
 	}
 	for _, s := range scanners {
 		wg.Add(1)
