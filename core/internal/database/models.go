@@ -158,6 +158,117 @@ const (
 	// own baseline category/incident type -- not a second, independent
 	// detection engine.
 	IncidentSystemBinaryIntegrity IncidentType = "system_binary_integrity_violation"
+
+	// -----------------------------------------------------------------
+	// Web Security signatures (VANGUARD Mega Expansion, Phase 3).
+	//
+	// All nine are indicator/heuristic detectors built entirely from
+	// what internal/detection's existing WebLogParser and AuthLogParser
+	// already expose (source IP, username, path, method, status code,
+	// User-Agent, Protocol, and -- only when the operator has customized
+	// their nginx log_format -- Host). None of these claim payload-level
+	// exploit confirmation, packet-level HTTP parsing, or WAF-grade
+	// protection; every doc comment below states its specific visibility
+	// limitation. See internal/detection/web_security.go and
+	// http_anomaly.go for the detectors themselves.
+	// -----------------------------------------------------------------
+
+	// IncidentPasswordSpraying: many DISTINCT usernames, each receiving
+	// relatively few failed SSH auth attempts, from one source IP within
+	// a bounded window -- the inverse shape of SSH brute force (one
+	// account, many attempts). Requires the auth log source to expose a
+	// username per attempt (auth.log's "Failed password for X" always
+	// does); if a future log source cannot expose usernames, this
+	// correlation is simply never fed for that source rather than
+	// inventing a placeholder username.
+	IncidentPasswordSpraying IncidentType = "password_spraying"
+
+	// IncidentCredentialStuffing: a source IP driving a high AUTHENTICATION
+	// FAILURE RATE against MANY distinct usernames within a bounded
+	// window -- stronger/broader than password spraying's own threshold
+	// (more usernames AND a sustained attempt rate). This is an
+	// authentication-anomaly classification based on observable failure
+	// volume/diversity; VANGUARD has no way to know whether the
+	// attempted credentials were actually sourced from a prior breach,
+	// so it never claims that.
+	IncidentCredentialStuffing IncidentType = "credential_stuffing"
+
+	// IncidentWebShellIndicator: a request to a script/executable path
+	// under a webroot-like or upload-like location, using a web-shell-
+	// associated extension (.php, .phtml, .php5, .jsp, .jspx, .asp,
+	// .aspx) and/or a suspicious command-like query parameter. A single
+	// such request is LOW/MEDIUM confidence by itself (ordinary legitimate
+	// applications serve .php/.jsp all day); confidence only escalates
+	// with corroborating evidence -- Phase 1/2's FIM/Binary-Integrity/
+	// Process findings on the same host within the correlation window
+	// (see the Phase 3 correlation wiring in engine_web_security.go).
+	IncidentWebShellIndicator IncidentType = "web_shell_indicator"
+
+	// IncidentSSRFIndicator: a request whose PATH OR QUERY STRING (the
+	// only per-request fields VANGUARD's log format exposes -- request
+	// bodies are never logged, so body-based SSRF payloads are simply
+	// invisible to this detector, and that limitation is real, not a
+	// bug) contains a literal reference to a loopback, RFC1918/link-local
+	// private address, or a well-known cloud metadata endpoint
+	// (169.254.169.254). Indicator-only: VANGUARD cannot confirm the
+	// backend application actually issued the resulting internal
+	// request, only that a client asked it to.
+	IncidentSSRFIndicator IncidentType = "ssrf_indicator"
+
+	// IncidentOASTIndicator: a request whose path/query references an
+	// external hostname that looks callback/interaction-oriented (a
+	// long, high-entropy, single-use-looking subdomain of a domain not
+	// otherwise seen from this source), OFTEN alongside (but not
+	// required to have) an SSRF-indicator-shaped request in the same
+	// short window from the same IP. VANGUARD has no DNS resolver log
+	// and no outbound packet capture, so it can NEVER prove an
+	// out-of-band interaction actually completed -- this is purely an
+	// indicator that an attacker-supplied callback-shaped value appeared
+	// in observed web traffic. That limitation is stated up front in
+	// every finding's Details, never silently assumed away.
+	IncidentOASTIndicator IncidentType = "oast_indicator"
+
+	// IncidentHostHeaderAnomaly: a Host header value that does not match
+	// any configured expected/allowed host (thresholds.ExpectedHosts),
+	// is a bare IP address, targets a loopback/private address, uses an
+	// unexpected port suffix, or a single source IP cycles through an
+	// abnormal number of distinct Host values in a short window. Only
+	// evaluated when Event.Host is non-empty -- the stock Nginx
+	// "combined" log format most hosts run does not log Host at all, and
+	// a missing Host field must never itself be treated as suspicious
+	// (see WebLogParser's doc comment).
+	IncidentHostHeaderAnomaly IncidentType = "host_header_anomaly"
+
+	// IncidentHTTPProtocolAnomaly: a source IP generating an abnormal
+	// rate of malformed/unsupported-method requests, non-standard
+	// protocol version tokens, or a burst of 400/414/431 responses
+	// within a bounded window. A single 400 is never itself an incident
+	// (broken clients and normal scanners produce these constantly) --
+	// only sustained frequency from one IP counts.
+	IncidentHTTPProtocolAnomaly IncidentType = "http_protocol_anomaly"
+
+	// IncidentRequestSmugglingIndicator: an INDICATOR-ONLY detector.
+	// VANGUARD's log-line-based visibility cannot see raw
+	// Content-Length/Transfer-Encoding header values at all (the
+	// standard Nginx/Apache access-log formats never log request
+	// headers), so this can only ever watch for the downstream SYMPTOM
+	// visible in status-code sequences: an abnormal burst of
+	// 400/408/502/503 responses from one source in a short window,
+	// which is consistent with -- but nowhere near proof of -- a
+	// smuggling attempt against a front-end/back-end pair. This
+	// limitation is documented in the finding's Details on every
+	// occurrence, never hidden.
+	IncidentRequestSmugglingIndicator IncidentType = "request_smuggling_indicator"
+
+	// IncidentAPIAbuse: endpoint-aware anomaly detection layered on top
+	// of (never duplicating) the existing Web Scanner Behavior / HTTP
+	// Flood / Web Dir Scan rules -- one source IP touching an abnormal
+	// number of DISTINCT paths, with a high 401/403/404 ratio, within a
+	// bounded window (endpoint enumeration / credential-stuffing-
+	// adjacent API probing), which is qualitatively different evidence
+	// than either "many requests to ONE path" (HTTP Flood) or "many 404s
+	// on a small fixed sensitive-path list" (Web Dir Scan).
+	IncidentAPIAbuse IncidentType = "api_abuse"
 )
 
 // HostLocalIP is the sentinel SourceIP value used for every host-security

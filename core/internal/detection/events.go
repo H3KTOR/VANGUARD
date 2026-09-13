@@ -52,6 +52,18 @@ type Event struct {
 	Path       string
 	StatusCode int
 	UserAgent  string
+	// Protocol is the HTTP version token from the request line (e.g.
+	// "HTTP/1.1"), empty if the request line was malformed/truncated
+	// (Mega Expansion Phase 3: HTTP Protocol Anomaly Detection).
+	Protocol string
+	// Host is the value of the Host header, ONLY populated when the
+	// configured web server access-log format actually logs it (the
+	// stock Nginx/Apache "combined" format does NOT include Host by
+	// default -- see parser_web.go's doc comment). Empty means "not
+	// observable from this log source", not "no Host header was sent";
+	// callers must never treat an empty Host as suspicious by itself
+	// (Mega Expansion Phase 3: Host Header / Virtual Host Abuse).
+	Host string
 
 	// RawLine is the original log line, kept for incident evidence /
 	// forensics and shown in the dashboard's "matched log lines" panel.

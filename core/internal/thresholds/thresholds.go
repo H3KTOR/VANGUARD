@@ -296,3 +296,233 @@ var DefaultSystemBinaryPaths = []string{
 	"/usr/sbin/sshd", "/usr/bin/passwd", "/usr/bin/ssh",
 	"/usr/bin/curl", "/usr/bin/wget", "/usr/bin/nc",
 }
+
+// ---------------------------------------------------------------------------
+// Web Security (VANGUARD Mega Expansion, Phase 3)
+//
+// Every detector below is built ENTIRELY from what internal/detection's
+// existing AuthLogParser/WebLogParser already expose (source IP, username,
+// path, method, status code, User-Agent, Protocol, optional Host). None of
+// these thresholds imply payload-level exploit confirmation, packet
+// capture, or WAF-grade inline inspection -- see each IncidentType's own
+// doc comment in internal/database/models.go for the specific visibility
+// limitation of that detector.
+// ---------------------------------------------------------------------------
+
+const (
+	// --- Password Spraying (feature 5) ---
+	//
+	// The key distinction from SSH Brute Force (thresholds.
+	// SSHBruteForceMinAttempts failures against ONE account) is shape:
+	// password spraying is MANY DISTINCT accounts, each receiving
+	// relatively FEW attempts, from the same source IP. Deliberately a
+	// wider window than brute force's own 2-minute window, since a
+	// spraying campaign is typically slower-paced per-account (to dodge
+	// per-account lockout policies) even though it touches more accounts
+	// overall.
+	PasswordSprayingWindow = 10 * time.Minute
+	// PasswordSprayingMinDistinctUsernames is the minimum number of
+	// DIFFERENT usernames that must each have failed at least once from
+	// one source IP within the window before this is spraying rather
+	// than ordinary single-account brute force.
+	PasswordSprayingMinDistinctUsernames = 5
+	// PasswordSprayingMaxAttemptsPerUser caps how many failures against
+	// any ONE of those distinct usernames may count toward the spraying
+	// signal -- if one username alone has racked up more than this many
+	// failures, that username's own failures look like ordinary brute
+	// force, not spraying, and are excluded from this correlation (the
+	// standalone SSH Brute Force rule already covers that account).
+	PasswordSprayingMaxAttemptsPerUser = 4
+
+	// --- Credential Stuffing (feature 6) ---
+	//
+	// Broader and higher-rate than password spraying: MORE distinct
+	// usernames AND a higher overall attempt volume in a comparable
+	// window. VANGUARD never claims the attempted credentials were
+	// actually sourced from a prior breach -- only that the OBSERVABLE
+	// behavior (many accounts, high failure volume, from one source)
+	// matches the credential-stuffing shape.
+	CredentialStuffingWindow                = 10 * time.Minute
+	CredentialStuffingMinDistinctUsernames  = 15
+	CredentialStuffingMinTotalAttempts      = 25
+	CredentialStuffingMinFailureRatioTenths = 7 // 0.7 as tenths (avoids a float threshold const)
+
+	// --- Web Shell Indicators (feature 3) ---
+	//
+	// WebShellCorrelationWindow bounds how far apart in time a Web Shell
+	// Indicator request and corroborating Phase 1/2 filesystem/process
+	// evidence (FIM, System Binary Integrity, Suspicious Process) may be
+	// while still counting as the same event for confidence escalation
+	// (reuses internal/detection's existing HostCorrelator -- see
+	// engine_web_security.go -- rather than a second correlation engine).
+	WebShellCorrelationWindow = 10 * time.Minute
+
+	// --- OAST / Out-of-Band Interaction Indicators (feature 9) ---
+	//
+	// OASTCallbackWindow bounds how long a distinct external
+	// callback-shaped hostname observed from one source IP is
+	// remembered for the "repeated callback" reinforcement signal.
+	OASTCallbackWindow = 15 * time.Minute
+	// OASTMinHostnameLabelLength: a callback-shaped subdomain label
+	// (the leftmost DNS label) is typically a long random token, e.g.
+	// "a1b2c3d4e5f6.oast.fun" -- labels shorter than this are far more
+	// likely to be ordinary hostnames (www, api, cdn, static, ...) and
+	// are excluded to keep the false-positive rate low.
+	OASTMinHostnameLabelLength = 16
+
+	// --- Host Header / Virtual Host Abuse (feature 10) ---
+	//
+	// HostHeaderEnumerationWindow bounds the sliding window used to
+	// detect one source IP cycling through an abnormal number of
+	// distinct Host header values (virtual-host enumeration/probing).
+	HostHeaderEnumerationWindow = 5 * time.Minute
+	// HostHeaderEnumerationMinDistinctHosts is the minimum number of
+	// DIFFERENT Host values from one IP within the window before this
+	// counts as enumeration, independent of whether any single value
+	// looked suspicious on its own.
+	HostHeaderEnumerationMinDistinctHosts = 5
+
+	// --- HTTP Protocol Anomaly Detection (feature 11) ---
+	//
+	// HTTPProtocolAnomalyWindow / MinCount: a single malformed request
+	// (bad method, non-standard protocol token, or a 400/414/431
+	// response) is never itself an incident -- scanners and broken
+	// clients produce these constantly. Only a SUSTAINED rate from one
+	// IP within the window counts.
+	HTTPProtocolAnomalyWindow   = 1 * time.Minute
+	HTTPProtocolAnomalyMinCount = 8
+
+	// --- Request-Smuggling Indicators (feature 12) ---
+	//
+	// VANGUARD's log-line visibility cannot see raw Content-Length/
+	// Transfer-Encoding header values at all (standard Nginx/Apache
+	// access-log formats never log request headers) -- this can only
+	// watch the downstream SYMPTOM: an abnormal burst of
+	// 400/408/502/503 responses from one source in a short window,
+	// which is consistent with, but nowhere near proof of, a smuggling
+	// attempt against a front-end/back-end pair.
+	RequestSmugglingWindow   = 1 * time.Minute
+	RequestSmugglingMinCount = 6
+
+	// --- API Abuse Detection (feature 13) ---
+	//
+	// Endpoint-aware anomaly detection layered on top of (never
+	// duplicating) Web Scanner Behavior/HTTP Flood/Web Dir Scan: one
+	// source IP touching an abnormal number of DISTINCT paths, with a
+	// high 401/403/404 ratio, within the window. Deliberately requires
+	// BOTH high path diversity AND a high failure ratio -- "one IP makes
+	// 100 normal successful requests to varied endpoints" must NOT
+	// trigger this on path-count alone.
+	APIAbuseWindow                = 1 * time.Minute
+	APIAbuseMinDistinctPaths      = 20
+	APIAbuseMinFailureRatioTenths = 6 // 0.6 as tenths
+)
+
+// ExpectedHosts is the configurable allowlist of Host header values
+// VANGUARD's own deployment legitimately expects (Feature 10: Host Header
+// / Virtual Host Abuse). Empty by default -- operators must explicitly
+// configure this (via -expected-hosts / VANGUARD_EXPECTED_HOSTS) for
+// "unexpected Host value" to be a meaningful signal; VANGUARD never
+// requires a hard-coded domain to remain functional, and an empty list
+// simply means that specific sub-check is skipped (the IP-address-Host,
+// loopback/private-Host, and Host-enumeration checks below remain active
+// regardless, since those don't depend on knowing the "real" hostname).
+var ExpectedHosts []string
+
+// WebShellExtensions are script/executable file extensions historically
+// associated with web-shell payloads. A request path ending in one of
+// these is, BY ITSELF, extremely weak evidence (ordinary PHP/JSP/ASP
+// applications serve these constantly) -- see IncidentWebShellIndicator's
+// doc comment for the corroborating-evidence model that actually drives
+// confidence.
+var WebShellExtensions = []string{
+	".php", ".phtml", ".php3", ".php4", ".php5", ".php7",
+	".jsp", ".jspx", ".asp", ".aspx", ".cfm",
+}
+
+// WebShellUploadPathHints are path substrings (case-insensitive) that
+// suggest an upload/writable directory -- a script request under one of
+// these is stronger evidence than the same extension under an ordinary
+// application path.
+var WebShellUploadPathHints = []string{
+	"/upload", "/uploads", "/images", "/img", "/media", "/files",
+	"/tmp", "/cache", "/wp-content/uploads", "/attachments",
+}
+
+// WebShellSuspiciousQueryParams are query-parameter names commonly used
+// by web-shell command-execution interfaces (e.g. "?cmd=whoami").
+// Case-insensitive substring match against the raw query string.
+var WebShellSuspiciousQueryParams = []string{
+	"cmd=", "exec=", "shell=", "command=", "system(", "passthru(",
+	"eval(", "assert(", "base64_decode(",
+}
+
+// PrivateAndReservedTargets are substrings identifying a request target
+// (path/query) that references a loopback, RFC1918/link-local private
+// address, or a well-known cloud-metadata endpoint -- the SSRF Indicator
+// signal (feature 8). This is a bounded, explicit list, never a full CIDR
+// parser applied to arbitrary log text, since the evidence available is
+// just a substring inside a path/query string, not a validated URL object.
+var PrivateAndReservedTargets = []string{
+	"127.0.0.1", "localhost", "::1",
+	"169.254.169.254", // cloud metadata (AWS/GCP/Azure/OpenStack all use this)
+	"metadata.google.internal",
+	"10.", "192.168.",
+	// 172.16.0.0/12: only the leading octet-pair patterns are checked
+	// programmatically (see isRFC1916SecondOctet in the detector), not
+	// listed here as literal strings, since "172.16." through "172.31."
+	// all qualify and a flat substring list would be unwieldy/incomplete.
+}
+
+// SSRFMetadataEndpoints are the highest-confidence SSRF targets --
+// cloud-metadata services that have no legitimate reason to ever appear
+// in an external-facing web request's path/query. A hit against one of
+// these alone is escalated (Critical) unlike an ordinary RFC1918 hit.
+var SSRFMetadataEndpoints = []string{
+	"169.254.169.254", "metadata.google.internal",
+}
+
+// KnownOASTProviderSuffixes are commercial OAST/interaction-tracking
+// service domains, kept ONLY as a small reinforcing signal -- per this
+// phase's explicit instruction, detection must NOT rely on this list as
+// the sole mechanism. The primary signal is the behavioral heuristic in
+// isCallbackShapedHostname (long random-looking leftmost label).
+var KnownOASTProviderSuffixes = []string{
+	".oast.fun", ".oast.pro", ".oast.live", ".oast.site", ".oast.online",
+	".oast.me", ".burpcollaborator.net", ".interact.sh", ".dnslog.cn",
+	".requestbin.net", ".webhook.site", ".canarytokens.com",
+}
+
+// ValidHTTPMethods are the standard HTTP methods VANGUARD treats as
+// well-formed for the HTTP Protocol Anomaly detector (feature 11). A
+// method outside this set (empty, lowercase-mismatched already
+// normalized upstream, or a garbage token) counts toward the anomaly
+// frequency counter.
+var ValidHTTPMethods = map[string]bool{
+	"GET": true, "POST": true, "PUT": true, "DELETE": true,
+	"HEAD": true, "OPTIONS": true, "PATCH": true, "CONNECT": true,
+	"TRACE": true,
+}
+
+// ProtocolAnomalyStatusCodes are status codes indicating a malformed
+// request/response at the HTTP-protocol level (as opposed to an ordinary
+// application-level 404/403).
+var ProtocolAnomalyStatusCodes = map[int]bool{
+	400: true, 414: true, 431: true,
+}
+
+// RequestSmugglingSymptomStatusCodes are status codes VANGUARD treats as
+// downstream SYMPTOMS potentially consistent with request smuggling
+// (front-end/back-end disagreement) -- see IncidentRequestSmugglingIndicator's
+// doc comment for why this is the only visibility available.
+var RequestSmugglingSymptomStatusCodes = map[int]bool{
+	400: true, 408: true, 502: true, 503: true,
+}
+
+// AuthEndpointHints are path substrings identifying an authentication or
+// otherwise sensitive API endpoint, used by the API Abuse detector to
+// weight endpoint-touch diversity more heavily when it concentrates on
+// these paths specifically.
+var AuthEndpointHints = []string{
+	"/login", "/auth", "/token", "/api/", "/oauth", "/signin", "/session",
+}

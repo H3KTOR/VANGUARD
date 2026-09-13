@@ -58,6 +58,25 @@ var BaseSeverity = map[database.IncidentType]int{
 	database.IncidentSuspiciousProcess:        50, // MEDIUM/HIGH boundary: best-effort userspace signal, deliberately not as high-confidence as the Phase 1 signatures
 	database.IncidentSystemBinaryIntegrity:    70, // HIGH tier: a replaced security-critical executable is a strong post-compromise indicator
 	database.IncidentHighConfidenceCompromise: 85, // CRITICAL tier: correlated process+file(+network/threat-intel) evidence -- VANGUARD's second-most-severe signature after IncidentAttackChain
+
+	// --- Web Security (Phase 3) ---
+	// Deliberately conservative starting severities: every one of these
+	// is an INDICATOR or heuristic built from log-visible evidence only
+	// (per this phase's explicit "no overclaiming" rule) -- none of them
+	// alone constitutes confirmed exploitation. Escalation to HIGH/
+	// CRITICAL happens via the same Escalate/EscalationBonus mechanism
+	// (a stronger single occurrence, e.g. a metadata-endpoint SSRF hit)
+	// or via correlation (e.g. a web-shell indicator corroborated by a
+	// Phase 1/2 FIM/process finding), never by inflating the base value.
+	database.IncidentPasswordSpraying:          45, // MEDIUM/HIGH boundary: many distinct accounts targeted, same shape-of-evidence tier as SSH brute force
+	database.IncidentCredentialStuffing:        50, // MEDIUM/HIGH boundary: broader/higher-rate than spraying alone
+	database.IncidentWebShellIndicator:         35, // MEDIUM: a single request-shaped indicator; Escalate bumps this when corroborated by filesystem/process evidence
+	database.IncidentSSRFIndicator:             35, // MEDIUM: a single request containing an internal/reserved target string; Escalate bumps this for a metadata-endpoint hit specifically
+	database.IncidentOASTIndicator:             30, // LOW/MEDIUM boundary: an external callback-shaped hostname observed in traffic, with no local proof of actual outbound interaction
+	database.IncidentHostHeaderAnomaly:         25, // LOW/MEDIUM boundary: a single unexpected Host value alone is often just a misconfigured client or a bot
+	database.IncidentHTTPProtocolAnomaly:       25, // LOW/MEDIUM boundary: malformed HTTP is extremely common from broken clients and casual scanners
+	database.IncidentRequestSmugglingIndicator: 40, // MEDIUM: symptom-only (status-code-sequence) evidence, explicitly not confirmed smuggling
+	database.IncidentAPIAbuse:                  35, // MEDIUM: endpoint-enumeration-shaped traffic; frequency/ratio components push it higher via the standard formula
 }
 
 // Breakdown documents how a RiskScore was derived. Every detector (real or
