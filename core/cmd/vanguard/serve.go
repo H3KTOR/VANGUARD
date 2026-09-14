@@ -311,6 +311,9 @@ func (a *app) runMaintenanceTick(ctx context.Context) {
 	if n := a.engine.ScannerTracker().Reap(now); n > 0 {
 		log.Printf("[serve] maintenance: reaped %d idle web-scanner tracker(s)", n)
 	}
+	if n := a.engine.AuthAbuseTracker().Reap(now); n > 0 {
+		log.Printf("[serve] maintenance: reaped %d idle auth-abuse tracker(s)", n)
+	}
 }
 
 // startHTTPServer builds the Echo instance and starts it listening in its

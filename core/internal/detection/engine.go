@@ -47,16 +47,17 @@ func (noopNotifier) OnIncident(*database.Incident) {}
 // Engine is safe for concurrent use: multiple tailers (auth.log, web
 // access log, honeypot) can feed it events from separate goroutines.
 type Engine struct {
-	db      *database.DB
-	state   *State
-	intel   ThreatIntelChecker
-	notify  Notifier
-	authP   *AuthLogParser
-	webP    *WebLogParser
-	dedupe  *dedupeWindow
-	chain   *ChainTracker   // Task 3: cross-signal attack-chain correlation state
-	scanner *ScannerTracker // Task 3: web-scanner-behavior heuristic state
-	hostCor *HostCorrelator // Mega Expansion Phase 2, Feature 7: process/file/network correlation state
+	db        *database.DB
+	state     *State
+	intel     ThreatIntelChecker
+	notify    Notifier
+	authP     *AuthLogParser
+	webP      *WebLogParser
+	dedupe    *dedupeWindow
+	chain     *ChainTracker     // Task 3: cross-signal attack-chain correlation state
+	scanner   *ScannerTracker   // Task 3: web-scanner-behavior heuristic state
+	hostCor   *HostCorrelator   // Mega Expansion Phase 2, Feature 7: process/file/network correlation state
+	authAbuse *AuthAbuseTracker // Mega Expansion Phase 3, Features 5/6: password spraying / credential stuffing state
 }
 
 // Config controls Engine construction.
@@ -85,16 +86,17 @@ func NewEngine(cfg Config) *Engine {
 		notify = noopNotifier{}
 	}
 	return &Engine{
-		db:      cfg.DB,
-		state:   NewState(cfg.MaxIdle),
-		intel:   intel,
-		notify:  notify,
-		authP:   NewAuthLogParser(),
-		webP:    NewWebLogParser(),
-		dedupe:  newDedupeWindow(2 * time.Minute),
-		chain:   NewChainTracker(cfg.MaxIdle),
-		scanner: NewScannerTracker(cfg.MaxIdle),
-		hostCor: NewHostCorrelator(),
+		db:        cfg.DB,
+		state:     NewState(cfg.MaxIdle),
+		intel:     intel,
+		notify:    notify,
+		authP:     NewAuthLogParser(),
+		webP:      NewWebLogParser(),
+		dedupe:    newDedupeWindow(2 * time.Minute),
+		chain:     NewChainTracker(cfg.MaxIdle),
+		scanner:   NewScannerTracker(cfg.MaxIdle),
+		hostCor:   NewHostCorrelator(),
+		authAbuse: NewAuthAbuseTracker(cfg.MaxIdle),
 	}
 }
 
@@ -111,6 +113,13 @@ func (e *Engine) ChainTracker() *ChainTracker { return e.chain }
 // primarily so cmd/vanguard's background maintenance loop can call Reap()
 // periodically to keep memory bounded.
 func (e *Engine) ScannerTracker() *ScannerTracker { return e.scanner }
+
+// AuthAbuseTracker exposes the Password Spraying / Credential Stuffing
+// sliding-window state (Mega Expansion Phase 3, features 5/6), primarily
+// so cmd/vanguard's background maintenance loop can call Reap()
+// periodically to keep memory bounded (mirrors State()/ChainTracker()/
+// ScannerTracker() above).
+func (e *Engine) AuthAbuseTracker() *AuthAbuseTracker { return e.authAbuse }
 
 // IngestAuthLogLine parses one /var/log/auth.log line and applies the SSH
 // brute-force / failed-then-success rules if it matches.
@@ -166,8 +175,13 @@ func (e *Engine) handleEvent(ev *Event) {
 		e.ruleSSHBruteForce(ev)
 		e.chain.RecordAuthFailure(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
 		e.ruleAttackChain(ev)
+		e.ruleAuthAbuse(ev)
 	case EventSSHAuthSuccess:
 		e.ruleFailedThenSuccess(ev)
+		// A success also feeds the Credential Stuffing failure-ratio
+		// computation (see AuthAbuseTracker.RecordSuccess's doc comment):
+		// a source IP that mostly succeeds must not look like stuffing.
+		e.authAbuse.RecordSuccess(ev.SourceIP, ev.Timestamp, thresholds.CredentialStuffingWindow)
 	case EventPortTouch:
 		e.rulePortScan(ev)
 		e.chain.RecordPortTouch(ev.SourceIP, ev.Port, ev.Timestamp, thresholds.AttackChainWindow)
