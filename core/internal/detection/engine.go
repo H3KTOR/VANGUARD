@@ -58,6 +58,7 @@ type Engine struct {
 	scanner   *ScannerTracker   // Task 3: web-scanner-behavior heuristic state
 	hostCor   *HostCorrelator   // Mega Expansion Phase 2, Feature 7: process/file/network correlation state
 	authAbuse *AuthAbuseTracker // Mega Expansion Phase 3, Features 5/6: password spraying / credential stuffing state
+	apiAbuse  *APIAbuseTracker  // Mega Expansion Phase 3, Feature 13: API abuse (endpoint-enumeration) state
 }
 
 // Config controls Engine construction.
@@ -97,6 +98,7 @@ func NewEngine(cfg Config) *Engine {
 		scanner:   NewScannerTracker(cfg.MaxIdle),
 		hostCor:   NewHostCorrelator(),
 		authAbuse: NewAuthAbuseTracker(cfg.MaxIdle),
+		apiAbuse:  NewAPIAbuseTracker(cfg.MaxIdle),
 	}
 }
 
@@ -120,6 +122,12 @@ func (e *Engine) ScannerTracker() *ScannerTracker { return e.scanner }
 // periodically to keep memory bounded (mirrors State()/ChainTracker()/
 // ScannerTracker() above).
 func (e *Engine) AuthAbuseTracker() *AuthAbuseTracker { return e.authAbuse }
+
+// APIAbuseTracker exposes the API Abuse (endpoint-enumeration) sliding-
+// window state (Mega Expansion Phase 3, feature 13), primarily so
+// cmd/vanguard's background maintenance loop can call Reap() periodically
+// to keep memory bounded (mirrors AuthAbuseTracker() above).
+func (e *Engine) APIAbuseTracker() *APIAbuseTracker { return e.apiAbuse }
 
 // IngestAuthLogLine parses one /var/log/auth.log line and applies the SSH
 // brute-force / failed-then-success rules if it matches.
@@ -192,6 +200,7 @@ func (e *Engine) handleEvent(ev *Event) {
 		e.ruleSQLiXSS(ev)
 		e.ruleHTTPFlood(ev)
 		e.ruleWebScannerBehavior(ev)
+		e.ruleAPIAbuse(ev)
 		if ev.StatusCode == 403 || ev.StatusCode == 404 {
 			e.chain.RecordWebProbe(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
 			e.ruleAttackChain(ev)
