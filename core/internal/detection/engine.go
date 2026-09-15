@@ -230,6 +230,7 @@ func (e *Engine) handleEvent(ev *Event) {
 		e.ruleHTTPProtocolAnomaly(ev)
 		e.ruleRequestSmuggling(ev)
 		e.ruleHostHeaderAbuse(ev)
+		e.ruleSSRFIndicator(ev)
 		if ev.StatusCode == 403 || ev.StatusCode == 404 {
 			e.chain.RecordWebProbe(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
 			e.ruleAttackChain(ev)

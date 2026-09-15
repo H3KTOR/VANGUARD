@@ -219,6 +219,44 @@ func (e *Engine) ruleRequestSmuggling(ev *Event) {
 }
 
 // ---------------------------------------------------------------------------
+// Rule: SSRF Indicators (feature 8)
+//
+// A single matching request is enough (unlike the sustained-rate
+// detectors above) -- see rules_ssrf.go's doc comment for the full
+// evidence/visibility-limitation rationale. Escalates only for a
+// cloud-metadata-endpoint hit specifically, never for an ordinary
+// RFC1918/loopback reference alone.
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleSSRFIndicator(ev *Event) {
+	matched, metadataHit, target := isSSRFIndicator(ev.Path)
+	if !matched {
+		return
+	}
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentSSRFIndicator) {
+		return
+	}
+	e.state.Touch(ev.SourceIP, ev.Timestamp)
+
+	breakdown := risk.Score(risk.Input{
+		Type:                database.IncidentSSRFIndicator,
+		EventCount:          1,
+		Threshold:           0,
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+		Escalate:            metadataHit,
+		EscalationNote:      "request target references a cloud-metadata endpoint",
+	})
+
+	e.createIncident(database.IncidentSSRFIndicator, ev, 1, breakdown, map[string]any{
+		"path":                  ev.Path,
+		"matched_target":        target,
+		"metadata_endpoint_hit": metadataHit,
+		"note":                  "indicator only: VANGUARD only sees the request path/query (never the body) and cannot confirm the backend actually issued the resulting internal request",
+	})
+}
+
+// ---------------------------------------------------------------------------
 // Rule: Host Header / Virtual Host Abuse (feature 10)
 //
 // Only evaluated when ev.Host is non-empty -- the stock Nginx/Apache
