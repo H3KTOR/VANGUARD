@@ -317,6 +317,15 @@ func (a *app) runMaintenanceTick(ctx context.Context) {
 	if n := a.engine.APIAbuseTracker().Reap(now); n > 0 {
 		log.Printf("[serve] maintenance: reaped %d idle api-abuse tracker(s)", n)
 	}
+	if n := a.engine.ProtocolAnomalyTracker().Reap(now); n > 0 {
+		log.Printf("[serve] maintenance: reaped %d idle protocol-anomaly tracker(s)", n)
+	}
+	if n := a.engine.SmugglingTracker().Reap(now); n > 0 {
+		log.Printf("[serve] maintenance: reaped %d idle request-smuggling tracker(s)", n)
+	}
+	if n := a.engine.HostHeaderTracker().Reap(now); n > 0 {
+		log.Printf("[serve] maintenance: reaped %d idle host-header tracker(s)", n)
+	}
 }
 
 // startHTTPServer builds the Echo instance and starts it listening in its

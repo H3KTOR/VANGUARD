@@ -135,3 +135,146 @@ func (e *Engine) ruleAPIAbuse(ev *Event) {
 		"note":                 "indicator only: endpoint-enumeration-SHAPED traffic (high path diversity + high 401/403/404 ratio), layered on top of (not duplicating) Web Scanner Behavior/HTTP Flood/Web Dir Scan",
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Rule: HTTP Protocol Anomaly Detection (feature 11)
+//
+// A single malformed request (bad method, non-standard protocol token, or
+// a 400/414/431 response) is never itself an incident -- scanners and
+// broken clients produce these constantly. Only records into the
+// WindowCounterTracker when isProtocolAnomalous(ev) is true at all, so
+// well-formed traffic never touches this tracker's memory; the incident
+// only fires once the SUSTAINED RATE within the window crosses
+// HTTPProtocolAnomalyMinCount.
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleHTTPProtocolAnomaly(ev *Event) {
+	if !isProtocolAnomalous(ev) {
+		return
+	}
+	count := e.protoAnomaly.Record(ev.SourceIP, ev.Timestamp, thresholds.HTTPProtocolAnomalyWindow)
+	if count < thresholds.HTTPProtocolAnomalyMinCount {
+		return
+	}
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentHTTPProtocolAnomaly) {
+		return
+	}
+
+	breakdown := risk.Score(risk.Input{
+		Type:                database.IncidentHTTPProtocolAnomaly,
+		EventCount:          count,
+		Threshold:           thresholds.HTTPProtocolAnomalyMinCount,
+		MaxFrequencyBonus:   20,
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+	})
+
+	e.createIncident(database.IncidentHTTPProtocolAnomaly, ev, count, breakdown, map[string]any{
+		"window_seconds":   int(thresholds.HTTPProtocolAnomalyWindow.Seconds()),
+		"anomaly_count":    count,
+		"last_method":      ev.Method,
+		"last_protocol":    ev.Protocol,
+		"last_status_code": ev.StatusCode,
+		"note":             "indicator only: sustained rate of malformed-method/non-standard-protocol/400-414-431 requests from one source; a single malformed request is never itself flagged",
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Rule: Request-Smuggling Indicators (feature 12)
+//
+// SYMPTOM-ONLY: VANGUARD's log-line visibility cannot see raw
+// Content-Length/Transfer-Encoding header values at all -- this only
+// watches for an abnormal burst of 400/408/502/503 responses from one
+// source in a short window, which is consistent with, but nowhere near
+// proof of, a smuggling attempt against a front-end/back-end pair.
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleRequestSmuggling(ev *Event) {
+	if !isRequestSmugglingSymptomStatus(ev.StatusCode) {
+		return
+	}
+	count := e.smuggling.Record(ev.SourceIP, ev.Timestamp, thresholds.RequestSmugglingWindow)
+	if count < thresholds.RequestSmugglingMinCount {
+		return
+	}
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentRequestSmugglingIndicator) {
+		return
+	}
+
+	breakdown := risk.Score(risk.Input{
+		Type:                database.IncidentRequestSmugglingIndicator,
+		EventCount:          count,
+		Threshold:           thresholds.RequestSmugglingMinCount,
+		MaxFrequencyBonus:   20,
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+	})
+
+	e.createIncident(database.IncidentRequestSmugglingIndicator, ev, count, breakdown, map[string]any{
+		"window_seconds":   int(thresholds.RequestSmugglingWindow.Seconds()),
+		"symptom_count":    count,
+		"last_status_code": ev.StatusCode,
+		"note":             "SYMPTOM-ONLY: VANGUARD cannot see request headers (Content-Length/Transfer-Encoding) from standard access logs; this is a burst of 400/408/502/503 responses consistent with, but nowhere near proof of, request smuggling",
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Rule: Host Header / Virtual Host Abuse (feature 10)
+//
+// Only evaluated when ev.Host is non-empty -- the stock Nginx/Apache
+// "combined" access-log format most deployments run does NOT log Host at
+// all (see parser_web.go), and a missing Host field must never itself be
+// treated as suspicious. Four independent signals, any one of which is
+// sufficient: IP-literal Host, loopback/private Host, a Host that fails
+// to match an operator-configured allowlist (only when configured), or
+// enumeration (many distinct Host values from one IP in a short window).
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleHostHeaderAbuse(ev *Event) {
+	if ev.Host == "" {
+		return
+	}
+
+	distinctHosts := e.hostHeader.Record(ev.SourceIP, ev.Host, ev.Timestamp, thresholds.HostHeaderEnumerationWindow)
+
+	ipLiteral := hostLooksLikeIPLiteral(ev.Host)
+	loopbackOrPrivate := hostIsLoopbackOrPrivate(ev.Host)
+	applicable, expectedMatch := hostMatchesExpected(ev.Host)
+	unexpectedHost := applicable && !expectedMatch
+	enumeration := distinctHosts >= thresholds.HostHeaderEnumerationMinDistinctHosts
+
+	if !ipLiteral && !loopbackOrPrivate && !unexpectedHost && !enumeration {
+		return
+	}
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentHostHeaderAnomaly) {
+		return
+	}
+
+	// Escalate (rather than rely on frequency alone) when the single
+	// current request itself is the strong signal (IP literal or
+	// loopback/private Host) -- these are meaningful on a single
+	// occurrence, unlike enumeration which is inherently frequency-based.
+	escalate := ipLiteral || loopbackOrPrivate
+
+	breakdown := risk.Score(risk.Input{
+		Type:                database.IncidentHostHeaderAnomaly,
+		EventCount:          distinctHosts,
+		Threshold:           thresholds.HostHeaderEnumerationMinDistinctHosts,
+		MaxFrequencyBonus:   15,
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+		Escalate:            escalate,
+		EscalationNote:      "Host header names a raw IP literal or a loopback/private address",
+	})
+
+	e.createIncident(database.IncidentHostHeaderAnomaly, ev, distinctHosts, breakdown, map[string]any{
+		"window_seconds":              int(thresholds.HostHeaderEnumerationWindow.Seconds()),
+		"distinct_hosts":              distinctHosts,
+		"last_host":                   ev.Host,
+		"host_is_ip_literal":          ipLiteral,
+		"host_is_loopback_or_private": loopbackOrPrivate,
+		"host_unexpected":             unexpectedHost,
+		"host_enumeration":            enumeration,
+		"note":                        "indicator only: an unexpected Host value alone is often just a misconfigured client or bot; escalated only for IP-literal/loopback/private Host values or sustained enumeration",
+	})
+}

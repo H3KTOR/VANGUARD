@@ -59,6 +59,10 @@ type Engine struct {
 	hostCor   *HostCorrelator   // Mega Expansion Phase 2, Feature 7: process/file/network correlation state
 	authAbuse *AuthAbuseTracker // Mega Expansion Phase 3, Features 5/6: password spraying / credential stuffing state
 	apiAbuse  *APIAbuseTracker  // Mega Expansion Phase 3, Feature 13: API abuse (endpoint-enumeration) state
+
+	protoAnomaly *WindowCounterTracker // Mega Expansion Phase 3, Feature 11: HTTP protocol anomaly rate state
+	smuggling    *WindowCounterTracker // Mega Expansion Phase 3, Feature 12: request-smuggling symptom rate state
+	hostHeader   *DistinctValueTracker // Mega Expansion Phase 3, Feature 10: Host header enumeration state
 }
 
 // Config controls Engine construction.
@@ -99,6 +103,10 @@ func NewEngine(cfg Config) *Engine {
 		hostCor:   NewHostCorrelator(),
 		authAbuse: NewAuthAbuseTracker(cfg.MaxIdle),
 		apiAbuse:  NewAPIAbuseTracker(cfg.MaxIdle),
+
+		protoAnomaly: NewWindowCounterTracker(cfg.MaxIdle),
+		smuggling:    NewWindowCounterTracker(cfg.MaxIdle),
+		hostHeader:   NewDistinctValueTracker(cfg.MaxIdle),
 	}
 }
 
@@ -128,6 +136,24 @@ func (e *Engine) AuthAbuseTracker() *AuthAbuseTracker { return e.authAbuse }
 // cmd/vanguard's background maintenance loop can call Reap() periodically
 // to keep memory bounded (mirrors AuthAbuseTracker() above).
 func (e *Engine) APIAbuseTracker() *APIAbuseTracker { return e.apiAbuse }
+
+// ProtocolAnomalyTracker exposes the HTTP Protocol Anomaly sliding-window
+// state (Mega Expansion Phase 3, feature 11), primarily so cmd/vanguard's
+// background maintenance loop can call Reap() periodically to keep
+// memory bounded.
+func (e *Engine) ProtocolAnomalyTracker() *WindowCounterTracker { return e.protoAnomaly }
+
+// SmugglingTracker exposes the Request-Smuggling-symptom sliding-window
+// state (Mega Expansion Phase 3, feature 12), primarily so cmd/vanguard's
+// background maintenance loop can call Reap() periodically to keep
+// memory bounded.
+func (e *Engine) SmugglingTracker() *WindowCounterTracker { return e.smuggling }
+
+// HostHeaderTracker exposes the Host Header enumeration sliding-window
+// state (Mega Expansion Phase 3, feature 10), primarily so cmd/vanguard's
+// background maintenance loop can call Reap() periodically to keep
+// memory bounded.
+func (e *Engine) HostHeaderTracker() *DistinctValueTracker { return e.hostHeader }
 
 // IngestAuthLogLine parses one /var/log/auth.log line and applies the SSH
 // brute-force / failed-then-success rules if it matches.
@@ -201,6 +227,9 @@ func (e *Engine) handleEvent(ev *Event) {
 		e.ruleHTTPFlood(ev)
 		e.ruleWebScannerBehavior(ev)
 		e.ruleAPIAbuse(ev)
+		e.ruleHTTPProtocolAnomaly(ev)
+		e.ruleRequestSmuggling(ev)
+		e.ruleHostHeaderAbuse(ev)
 		if ev.StatusCode == 403 || ev.StatusCode == 404 {
 			e.chain.RecordWebProbe(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
 			e.ruleAttackChain(ev)
