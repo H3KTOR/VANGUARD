@@ -38,8 +38,9 @@ import (
 
 // HostCorrelator is safe for concurrent use.
 type HostCorrelator struct {
-	mu    sync.Mutex
-	files []time.Time // sensitive-file-activity timestamps, sorted oldest-first
+	mu        sync.Mutex
+	files     []time.Time // sensitive-file-activity timestamps, sorted oldest-first
+	processes []time.Time // Suspicious Process finding timestamps, sorted oldest-first (feed-in for feature 3's Web Shell correlation below, in addition to feature 7's own use of files)
 }
 
 // NewHostCorrelator constructs an empty HostCorrelator.
@@ -63,4 +64,30 @@ func (c *HostCorrelator) RecentFileFindingCount(now time.Time, window time.Durat
 	defer c.mu.Unlock()
 	c.files = pruneOlderThan(c.files, now.Add(-window))
 	return len(c.files)
+}
+
+// RecordProcessFinding registers a Suspicious Process finding signal at
+// ts, pruning entries older than window in the same pass. Feed-in for
+// Feature 3 (Web Shell Indicators): a web-shell-shaped HTTP request
+// corroborated by a recent Suspicious Process finding on the same host
+// is much stronger evidence than either signal alone (the classic
+// "attacker uploads a shell, then the web server process spawns an
+// unexpected child" chain).
+func (c *HostCorrelator) RecordProcessFinding(ts time.Time, window time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.processes = append(pruneOlderThan(c.processes, ts.Add(-window)), ts)
+}
+
+// RecentFindingCount reports how many sensitive-file-activity AND
+// Suspicious Process finding signals (combined) are still within window
+// of now, pruning stale entries from both slices first. Used by Feature
+// 3's Web Shell Indicator correlation, which treats either kind of
+// recent host-security evidence as corroborating.
+func (c *HostCorrelator) RecentFindingCount(now time.Time, window time.Duration) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.files = pruneOlderThan(c.files, now.Add(-window))
+	c.processes = pruneOlderThan(c.processes, now.Add(-window))
+	return len(c.files) + len(c.processes)
 }

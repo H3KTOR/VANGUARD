@@ -46,6 +46,16 @@ func (e *Engine) ReportHostFinding(f hostsec.Finding) {
 		e.hostCor.RecordFileFinding(now, thresholds.HostCorrelationWindow)
 	}
 
+	// Feature 3 feed-in: a Suspicious Process finding is also
+	// corroborating evidence for a concurrent Web Shell Indicator
+	// request (see ruleWebShellIndicator in engine_websec.go), tracked
+	// separately from the file-activity window above so a request
+	// evaluated purely against the ordinary HostCorrelationWindow sees
+	// both kinds of host-security evidence.
+	if f.Type == database.IncidentSuspiciousProcess {
+		e.hostCor.RecordProcessFinding(now, thresholds.HostCorrelationWindow)
+	}
+
 	if !e.dedupe.allow(database.HostLocalIP+"|"+f.Subject, f.Type) {
 		return
 	}

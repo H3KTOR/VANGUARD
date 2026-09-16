@@ -378,3 +378,64 @@ func (e *Engine) ruleOASTIndicator(ev *Event) {
 		"note":                        "indicator only: VANGUARD cannot confirm any out-of-band DNS resolution or HTTP callback actually occurred -- this only observes that a callback-shaped hostname appeared in an inbound request's path/query",
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Rule: Web Shell Indicators (feature 3/7)
+//
+// None of the three request-shape signals in classifyWebShellRequest
+// (script extension, upload-path location, suspicious command-style
+// query parameter) is individually strong enough to raise this above
+// LOW/MEDIUM -- ordinary applications serve .php/.jsp requests under
+// upload directories all day. Confidence only escalates when CORROBORATED
+// by a recent Phase 1/2 host-security finding (FIM change, System Binary
+// Integrity violation, or Suspicious Process) via the SAME HostCorrelator
+// already wired up for feature 7's Process->File->Network correlation --
+// reused here, not duplicated, per the mega-prompt's "never create a
+// second correlation engine" rule.
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleWebShellIndicator(ev *Event) {
+	sig := classifyWebShellRequest(ev.Path)
+	if !sig.any() {
+		return
+	}
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentWebShellIndicator) {
+		return
+	}
+	e.state.Touch(ev.SourceIP, ev.Timestamp)
+
+	now := ev.Timestamp
+	recentHostFindings := e.hostCor.RecentFindingCount(now, thresholds.WebShellCorrelationWindow)
+	corroborated := recentHostFindings > 0
+
+	// Frequency-style bonus proportional to how many of the three
+	// (still individually weak) request-shape signals matched --
+	// capped low so this alone can never approach the correlation-
+	// driven escalation below.
+	shapeBonus := sig.count() - 1
+	if shapeBonus < 0 {
+		shapeBonus = 0
+	}
+
+	breakdown := risk.Score(risk.Input{
+		Type:                database.IncidentWebShellIndicator,
+		EventCount:          1 + shapeBonus,
+		Threshold:           1,
+		MaxFrequencyBonus:   10,
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+		Escalate:            corroborated,
+		EscalationNote:      "corroborated by a recent Phase 1/2 host-security finding (FIM/Binary-Integrity/Suspicious Process) on this host",
+	})
+
+	e.createIncident(database.IncidentWebShellIndicator, ev, 1, breakdown, map[string]any{
+		"path":                       ev.Path,
+		"has_web_shell_extension":    sig.hasExtension,
+		"in_upload_path":             sig.inUploadPath,
+		"suspicious_query_param":     sig.suspiciousParam,
+		"correlation_window_seconds": int(thresholds.WebShellCorrelationWindow.Seconds()),
+		"recent_host_findings":       recentHostFindings,
+		"corroborated":               corroborated,
+		"note":                       "indicator only: a single request-shaped match is LOW/MEDIUM confidence by itself (ordinary applications serve .php/.jsp under upload directories constantly); escalated only when corroborated by a recent FIM/Binary-Integrity/Suspicious-Process finding on this host",
+	})
+}
