@@ -63,6 +63,7 @@ type Engine struct {
 	protoAnomaly *WindowCounterTracker // Mega Expansion Phase 3, Feature 11: HTTP protocol anomaly rate state
 	smuggling    *WindowCounterTracker // Mega Expansion Phase 3, Feature 12: request-smuggling symptom rate state
 	hostHeader   *DistinctValueTracker // Mega Expansion Phase 3, Feature 10: Host header enumeration state
+	oastCallback *DistinctValueTracker // Mega Expansion Phase 3, Feature 9: distinct OAST-callback-shaped hostnames per IP (repeated-callback reinforcement)
 }
 
 // Config controls Engine construction.
@@ -107,6 +108,7 @@ func NewEngine(cfg Config) *Engine {
 		protoAnomaly: NewWindowCounterTracker(cfg.MaxIdle),
 		smuggling:    NewWindowCounterTracker(cfg.MaxIdle),
 		hostHeader:   NewDistinctValueTracker(cfg.MaxIdle),
+		oastCallback: NewDistinctValueTracker(cfg.MaxIdle),
 	}
 }
 
@@ -154,6 +156,12 @@ func (e *Engine) SmugglingTracker() *WindowCounterTracker { return e.smuggling }
 // background maintenance loop can call Reap() periodically to keep
 // memory bounded.
 func (e *Engine) HostHeaderTracker() *DistinctValueTracker { return e.hostHeader }
+
+// OASTTracker exposes the OAST-callback distinct-hostname sliding-window
+// state (Mega Expansion Phase 3, feature 9), primarily so cmd/vanguard's
+// background maintenance loop can call Reap() periodically to keep
+// memory bounded.
+func (e *Engine) OASTTracker() *DistinctValueTracker { return e.oastCallback }
 
 // IngestAuthLogLine parses one /var/log/auth.log line and applies the SSH
 // brute-force / failed-then-success rules if it matches.
@@ -231,6 +239,7 @@ func (e *Engine) handleEvent(ev *Event) {
 		e.ruleRequestSmuggling(ev)
 		e.ruleHostHeaderAbuse(ev)
 		e.ruleSSRFIndicator(ev)
+		e.ruleOASTIndicator(ev)
 		if ev.StatusCode == 403 || ev.StatusCode == 404 {
 			e.chain.RecordWebProbe(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
 			e.ruleAttackChain(ev)

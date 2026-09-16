@@ -316,3 +316,65 @@ func (e *Engine) ruleHostHeaderAbuse(ev *Event) {
 		"note":                        "indicator only: an unexpected Host value alone is often just a misconfigured client or bot; escalated only for IP-literal/loopback/private Host values or sustained enumeration",
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Rule: OAST / Out-of-Band Interaction Indicators (feature 9)
+//
+// A single callback-shaped hostname is already worth a conservative
+// LOW/MEDIUM-tier finding (see rules_oast.go's isCallbackShapedHostname
+// for the length+randomness heuristic and its explicit non-reliance on
+// thresholds.KnownOASTProviderSuffixes alone). Two independent
+// reinforcement signals raise confidence without ever being required:
+// (a) the matched hostname additionally ends in a known commercial OAST
+// provider suffix, or (b) the same source IP has triggered this
+// detector against MULTIPLE DISTINCT callback-shaped hostnames within
+// OASTCallbackWindow (a single blind-SSRF probe tool often tries several
+// different generated subdomains in quick succession). Escalation never
+// claims the callback interaction was actually observed completing --
+// VANGUARD has no DNS/packet-capture visibility to confirm that.
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleOASTIndicator(ev *Event) {
+	matched, reinforcedBySuffix, hostname := isOASTIndicator(ev.Path)
+	if !matched {
+		return
+	}
+	distinctCallbacks := e.oastCallback.Record(ev.SourceIP, hostname, ev.Timestamp, thresholds.OASTCallbackWindow)
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentOASTIndicator) {
+		return
+	}
+	e.state.Touch(ev.SourceIP, ev.Timestamp)
+
+	repeatedCallbacks := distinctCallbacks >= 2
+	escalate := reinforcedBySuffix || repeatedCallbacks
+
+	escalationNote := ""
+	switch {
+	case reinforcedBySuffix && repeatedCallbacks:
+		escalationNote = "matched hostname ends in a known commercial OAST provider suffix AND this IP has probed multiple distinct callback-shaped hostnames"
+	case reinforcedBySuffix:
+		escalationNote = "matched hostname ends in a known commercial OAST provider suffix"
+	case repeatedCallbacks:
+		escalationNote = "this IP has probed multiple distinct callback-shaped hostnames in the correlation window"
+	}
+
+	breakdown := risk.Score(risk.Input{
+		Type:                database.IncidentOASTIndicator,
+		EventCount:          distinctCallbacks,
+		Threshold:           1,
+		MaxFrequencyBonus:   10,
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+		Escalate:            escalate,
+		EscalationNote:      escalationNote,
+	})
+
+	e.createIncident(database.IncidentOASTIndicator, ev, distinctCallbacks, breakdown, map[string]any{
+		"window_seconds":              int(thresholds.OASTCallbackWindow.Seconds()),
+		"matched_hostname":            hostname,
+		"distinct_callback_hostnames": distinctCallbacks,
+		"known_oast_provider_suffix":  reinforcedBySuffix,
+		"repeated_distinct_callbacks": repeatedCallbacks,
+		"note":                        "indicator only: VANGUARD cannot confirm any out-of-band DNS resolution or HTTP callback actually occurred -- this only observes that a callback-shaped hostname appeared in an inbound request's path/query",
+	})
+}

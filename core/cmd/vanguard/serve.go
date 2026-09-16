@@ -326,6 +326,9 @@ func (a *app) runMaintenanceTick(ctx context.Context) {
 	if n := a.engine.HostHeaderTracker().Reap(now); n > 0 {
 		log.Printf("[serve] maintenance: reaped %d idle host-header tracker(s)", n)
 	}
+	if n := a.engine.OASTTracker().Reap(now); n > 0 {
+		log.Printf("[serve] maintenance: reaped %d idle OAST-callback tracker(s)", n)
+	}
 }
 
 // startHTTPServer builds the Echo instance and starts it listening in its
