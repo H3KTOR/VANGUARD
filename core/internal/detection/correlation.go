@@ -36,6 +36,15 @@ type chainIPState struct {
 	webProbes   []time.Time       // web-probing stage: 403/404 timestamps (sorted, oldest-first)
 	authFails   []time.Time       // auth-probing stage: SSH failure timestamps (sorted, oldest-first)
 
+	// exploitSignals feeds the Phase 3 Web Attack Chain extension's
+	// Exploitation stage (see EvaluateWebAttackChain below): timestamps
+	// of Web-Shell-Indicator-shaped or SSRF-Indicator-shaped requests
+	// from this IP, sorted oldest-first. Deliberately reuses this SAME
+	// per-IP struct/mutex rather than a second tracker, since it is just
+	// one more sliding-window stage sharing the exact same
+	// record/prune/reap shape as portTouches/webProbes/authFails.
+	exploitSignals []time.Time
+
 	lastSeen time.Time
 }
 
@@ -107,6 +116,17 @@ func (c *ChainTracker) RecordAuthFailure(ip string, ts time.Time, window time.Du
 	st.authFails = append(pruneOlderThan(st.authFails, ts.Add(-window)), ts)
 }
 
+// RecordExploitSignal registers a Phase 3 Web Attack Chain
+// Exploitation-stage signal (a Web-Shell-Indicator-shaped or
+// SSRF-Indicator-shaped request) for ip.
+func (c *ChainTracker) RecordExploitSignal(ip string, ts time.Time, window time.Duration) {
+	st := c.get(ip)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.lastSeen = ts
+	st.exploitSignals = append(pruneOlderThan(st.exploitSignals, ts.Add(-window)), ts)
+}
+
 // Evaluate prunes ip's state to window and reports whether the full
 // coordinated chain is currently present: all three stages must meet
 // their minimum counts (see thresholds.AttackChainMin*), AND the earliest
@@ -168,6 +188,57 @@ func (c *ChainTracker) Evaluate(ip string, now time.Time, window time.Duration) 
 	}
 
 	return reconCount, webCount, authCount, true
+}
+
+// EvaluateWebAttackChain prunes ip's state to window and reports whether
+// the Phase 3 web-focused multi-stage sequence is currently present: Web
+// Probing -> Auth Probing -> Exploitation (see
+// thresholds.WebAttackChain* for the minimum counts). This REUSES the
+// same webProbes/authFails stage state Evaluate above already maintains
+// (fed by the exact same RecordWebProbe/RecordAuthFailure calls in
+// engine.go -- no duplicated recording path), adding only the new
+// exploitSignals stage introduced specifically for this extension.
+// Deliberately does NOT require a recon (port-scan) stage -- the
+// mega-prompt's own worked examples for this correlation ("Web Probe ->
+// SSRF -> Suspicious Outbound", "API Enumeration -> Auth Abuse ->
+// Credential Stuffing") begin at web probing, not network-level
+// reconnaissance, since a pure web-application attacker may never touch
+// multiple TCP ports at all.
+func (c *ChainTracker) EvaluateWebAttackChain(ip string, now time.Time, window time.Duration) (webCount, authCount, exploitCount int, matched bool) {
+	st := c.get(ip)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+
+	cutoff := now.Add(-window)
+	st.webProbes = pruneOlderThan(st.webProbes, cutoff)
+	st.authFails = pruneOlderThan(st.authFails, cutoff)
+	st.exploitSignals = pruneOlderThan(st.exploitSignals, cutoff)
+
+	webCount = len(st.webProbes)
+	authCount = len(st.authFails)
+	exploitCount = len(st.exploitSignals)
+
+	if webCount < thresholds.WebAttackChainMinWebProbes ||
+		authCount < thresholds.WebAttackChainMinAuthFailures ||
+		exploitCount < thresholds.WebAttackChainMinExploitSignals {
+		return webCount, authCount, exploitCount, false
+	}
+
+	// Sequence check, same tie-tolerant whole-second-precision approach
+	// as Evaluate above: web probing must start no later than auth
+	// probing, which must start no later than the first exploitation
+	// signal. This is what distinguishes a genuine staged web attack
+	// from three unrelated signal bursts that happen to coexist in the
+	// same window with no coherent story.
+	webFirst := st.webProbes[0].Truncate(time.Second)
+	authFirst := st.authFails[0].Truncate(time.Second)
+	exploitFirst := st.exploitSignals[0].Truncate(time.Second)
+
+	if webFirst.After(authFirst) || authFirst.After(exploitFirst) {
+		return webCount, authCount, exploitCount, false
+	}
+
+	return webCount, authCount, exploitCount, true
 }
 
 // Reap removes chain state for IPs idle longer than maxIdle. Intended to

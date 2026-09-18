@@ -233,6 +233,17 @@ func (e *Engine) ruleSSRFIndicator(ev *Event) {
 	if !matched {
 		return
 	}
+
+	// Web Attack Chain feed-in (Phase 3 correlation extension): an
+	// SSRF-Indicator-shaped request is Exploitation-stage evidence for
+	// EvaluateWebAttackChain, regardless of whether dedupe below ends up
+	// suppressing this request's OWN standalone incident -- the
+	// underlying fact (this shape of request just happened) is still
+	// real and still corroborating evidence for a concurrent web-attack
+	// chain. Recorded/evaluated here, not a duplicate detection path.
+	e.chain.RecordExploitSignal(ev.SourceIP, ev.Timestamp, thresholds.WebAttackChainWindow)
+	e.ruleWebAttackChain(ev)
+
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentSSRFIndicator) {
 		return
 	}
@@ -399,6 +410,15 @@ func (e *Engine) ruleWebShellIndicator(ev *Event) {
 	if !sig.any() {
 		return
 	}
+
+	// Web Attack Chain feed-in (Phase 3 correlation extension): a
+	// Web-Shell-Indicator-shaped request is Exploitation-stage evidence
+	// for EvaluateWebAttackChain, regardless of whether dedupe below
+	// ends up suppressing this request's OWN standalone incident (same
+	// rationale as ruleSSRFIndicator's identical feed-in above).
+	e.chain.RecordExploitSignal(ev.SourceIP, ev.Timestamp, thresholds.WebAttackChainWindow)
+	e.ruleWebAttackChain(ev)
+
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentWebShellIndicator) {
 		return
 	}
@@ -437,5 +457,50 @@ func (e *Engine) ruleWebShellIndicator(ev *Event) {
 		"recent_host_findings":       recentHostFindings,
 		"corroborated":               corroborated,
 		"note":                       "indicator only: a single request-shaped match is LOW/MEDIUM confidence by itself (ordinary applications serve .php/.jsp under upload directories constantly); escalated only when corroborated by a recent FIM/Binary-Integrity/Suspicious-Process finding on this host",
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Rule: Web Attack Chain Correlation (Phase 3, Section 14)
+//
+// Extends Task 3's ChainTracker/ScoreChain correlation architecture to a
+// web-focused multi-stage sequence: Web Probing (403/404s) -> Auth
+// Probing (SSH failures) -> Exploitation (a Web-Shell-Indicator or
+// SSRF-Indicator-shaped request), all from one source IP within
+// thresholds.WebAttackChainWindow. Evaluated from three separate feed-in
+// points (see engine.go's handleEvent for the web-probe/auth-failure
+// RecordWebProbe/RecordAuthFailure calls, and ruleSSRFIndicator/
+// ruleWebShellIndicator above for the exploitation-stage
+// RecordExploitSignal calls) -- exactly mirroring how ruleAttackChain
+// itself is called from multiple event points, since any one of the
+// three stages might be the LAST one to complete the sequence.
+// ---------------------------------------------------------------------------
+
+func (e *Engine) ruleWebAttackChain(ev *Event) {
+	webCount, authCount, exploitCount, matched := e.chain.EvaluateWebAttackChain(ev.SourceIP, ev.Timestamp, thresholds.WebAttackChainWindow)
+	if !matched {
+		return
+	}
+	if !e.dedupe.allow(ev.SourceIP, database.IncidentWebAttackChain) {
+		return
+	}
+
+	breakdown := risk.ScoreChain(risk.ChainInput{
+		ConstituentTypes: []database.IncidentType{
+			database.IncidentWebDirScan,        // web-probing stage
+			database.IncidentSSHBruteForce,     // auth-probing stage
+			database.IncidentWebShellIndicator, // exploitation stage
+		},
+		RecentIncidentCount: e.recentCount(ev.SourceIP),
+		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
+	})
+
+	e.createIncident(database.IncidentWebAttackChain, ev, webCount+authCount+exploitCount, breakdown, map[string]any{
+		"window_seconds":       int(thresholds.WebAttackChainWindow.Seconds()),
+		"web_probe_count":      webCount,
+		"auth_failure_count":   authCount,
+		"exploit_signal_count": exploitCount,
+		"stages":               "web_probing(403/404) -> auth_probing(ssh_failures) -> exploitation(web_shell_or_ssrf_indicator)",
+		"note":                 "aggregated risk score multiplied by 1.5 per coordinated multi-stage attack policy; VANGUARD cannot confirm the exploitation-stage request actually succeeded (e.g. an SSRF-indicator request's resulting internal call, or that an uploaded web shell is actually reachable/functional) -- this correlates observed request SHAPES, not confirmed outcomes",
 	})
 }

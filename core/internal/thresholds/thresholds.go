@@ -110,6 +110,43 @@ const (
 	AttackChainRiskMultiplier = 1.5
 )
 
+// --- Web Attack Chain Correlation (Mega Expansion, Phase 3, Section 14) ---
+//
+// Extends the SAME ChainTracker/ScoreChain correlation architecture as
+// Task 3's Attack Chain above to a web-focused multi-stage sequence:
+// Web Probing -> Auth Probing -> Exploitation. Deliberately a WIDER
+// window than the classic recon->web->auth chain (10 vs 5 minutes),
+// since a deliberate web-app attacker chaining recon, credential abuse,
+// and a shell/SSRF attempt typically paces the stages further apart
+// than an automated network-level scanner does.
+const (
+	// WebAttackChainWindow is the sliding window within which all three
+	// web-attack-chain stages must occur from the same source IP.
+	WebAttackChainWindow = 10 * time.Minute
+
+	// WebAttackChainMinWebProbes is the web-probing-stage trigger: this
+	// many 403/404 responses OR API-abuse-shaped distinct-path touches
+	// (within WebAttackChainWindow) counts as the "Web Probing" stage.
+	WebAttackChainMinWebProbes = 3
+
+	// WebAttackChainMinAuthFailures is the auth-probing-stage trigger:
+	// this many failed SSH logins (within WebAttackChainWindow) counts
+	// as the "Auth Probing" stage.
+	WebAttackChainMinAuthFailures = 3
+
+	// WebAttackChainMinExploitSignals is the exploitation-stage trigger:
+	// at least this many Web-Shell-Indicator-shaped or SSRF-Indicator-
+	// shaped requests (within WebAttackChainWindow) counts as the
+	// "Exploitation" stage. Deliberately just 1 -- unlike the recon/auth
+	// stages (which need volume to distinguish a real campaign from
+	// noise), a single web-shell/SSRF-shaped request occurring AFTER
+	// established web-probing and auth-probing stages is already a
+	// meaningful escalation signal in context, even though that same
+	// single request in isolation (Feature 3/8's own standalone rule)
+	// stays a conservative LOW/MEDIUM finding.
+	WebAttackChainMinExploitSignals = 1
+)
+
 // --- Web Scanner Behavior Detection (heuristic, Task 3) ---
 
 const (

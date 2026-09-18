@@ -59,6 +59,25 @@ const (
 	// missing or known-scanner User-Agent string.
 	IncidentWebScanner IncidentType = "web_scanner_behavior"
 
+	// IncidentWebAttackChain extends the same correlation architecture as
+	// IncidentAttackChain (Task 3) to a Phase 3 web-focused multi-stage
+	// sequence from one source IP: Web Probing (403/404 reconnaissance
+	// OR API-abuse-shaped endpoint enumeration) -> Auth Probing (SSH
+	// brute-force/spraying-shaped failures) -> Exploitation (a Web Shell
+	// Indicator or SSRF Indicator-shaped request), all within
+	// thresholds.WebAttackChainWindow. This is a *correlation* of
+	// existing weaker Phase 3 signals, reusing the SAME ChainTracker
+	// state machine and risk.ScoreChain aggregation as
+	// IncidentAttackChain (see correlation.go's ChainTracker.
+	// EvaluateWebAttackChain) -- never a second/duplicate correlation
+	// engine. Matches the mega-prompt's worked examples: "Recon -> Web
+	// Probing -> Auth Abuse -> Web Shell Indicator" and "Web Probe ->
+	// SSRF -> Suspicious Outbound" (VANGUARD cannot observe the actual
+	// outbound connection an SSRF-shaped request may have triggered, so
+	// that third stage is represented here by the SSRF-Indicator request
+	// itself, not a confirmed outbound connection).
+	IncidentWebAttackChain IncidentType = "web_attack_chain"
+
 	// -----------------------------------------------------------------
 	// Host Security signatures (VANGUARD Mega Expansion, Phase 1).
 	//

@@ -215,8 +215,17 @@ func (e *Engine) handleEvent(ev *Event) {
 	switch ev.Kind {
 	case EventSSHAuthFailure:
 		e.ruleSSHBruteForce(ev)
-		e.chain.RecordAuthFailure(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
+		// Recorded at the WIDER of the two consumer windows
+		// (thresholds.WebAttackChainWindow, 10min > AttackChainWindow's
+		// 5min) so this single sliding-window slice retains enough
+		// history to serve BOTH Evaluate (classic recon->web->auth chain)
+		// and EvaluateWebAttackChain (web->auth->exploit chain) -- each
+		// still re-prunes to its OWN narrower window at read time, so
+		// neither correlation ever sees a stale entry the other doesn't
+		// also see.
+		e.chain.RecordAuthFailure(ev.SourceIP, ev.Timestamp, thresholds.WebAttackChainWindow)
 		e.ruleAttackChain(ev)
+		e.ruleWebAttackChain(ev)
 		e.ruleAuthAbuse(ev)
 	case EventSSHAuthSuccess:
 		e.ruleFailedThenSuccess(ev)
@@ -242,8 +251,12 @@ func (e *Engine) handleEvent(ev *Event) {
 		e.ruleOASTIndicator(ev)
 		e.ruleWebShellIndicator(ev)
 		if ev.StatusCode == 403 || ev.StatusCode == 404 {
-			e.chain.RecordWebProbe(ev.SourceIP, ev.Timestamp, thresholds.AttackChainWindow)
+			// See the EventSSHAuthFailure case above for why this
+			// records at the wider WebAttackChainWindow rather than
+			// AttackChainWindow.
+			e.chain.RecordWebProbe(ev.SourceIP, ev.Timestamp, thresholds.WebAttackChainWindow)
 			e.ruleAttackChain(ev)
+			e.ruleWebAttackChain(ev)
 		}
 	case EventHoneypotHit:
 		e.ruleHoneypot(ev)

@@ -39,6 +39,17 @@ var BaseSeverity = map[database.IncidentType]int{
 	// most severe signature.
 	database.IncidentAttackChain: 90,
 
+	// IncidentWebAttackChain is likewise scored via ScoreChain (see
+	// ChainTracker.EvaluateWebAttackChain in correlation.go), needing
+	// this map entry for the same fallback reasons as IncidentAttackChain
+	// above. Its aggregated constituent severities (Web Probing + Auth
+	// Probing + Exploitation stage) are naturally lower than the classic
+	// recon/web/auth chain's, since Phase 3's own constituent base
+	// severities are deliberately conservative -- still VANGUARD's
+	// second web-focused most-severe signature after a direct
+	// IncidentHighConfidenceCompromise correlation.
+	database.IncidentWebAttackChain: 75,
+
 	// --- Host Security (Phase 1) ---
 	// These base severities are intentionally high: every one of these
 	// signatures represents host-local evidence with essentially no
