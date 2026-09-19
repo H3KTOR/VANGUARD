@@ -59,8 +59,17 @@ RUN printf '$ActionFileDefaultTemplate RSYSLOG_TraditionalFileFormat\n' > /etc/r
 # path-traversal / SQLi scenarios have something realistic to request.
 # The stock Debian nginx access-log format is Nginx's default "combined"
 # format, which VANGUARD's WebLogParser already parses. ---
-RUN mkdir -p /var/www/html/wp-admin \
-    && echo "<html><body>VANGUARD Lab Victim</body></html>" > /var/www/html/index.html
+RUN mkdir -p /var/www/html/wp-admin /var/www/html/uploads /var/www/html/wp-content/uploads \
+    && echo "<html><body>VANGUARD Lab Victim</body></html>" > /var/www/html/index.html \
+    && echo "<?php /* not a real web shell -- static fixture file for the Web Shell Indicator lab scenario, VANGUARD only inspects the REQUEST PATH, never file contents */ ?>" > /var/www/html/uploads/shell.php
+
+# --- Nginx log_format: append the Host header as VANGUARD's WebLogParser
+# already optionally understands (see parser_web.go's trailing-quoted-
+# field support) -- the stock "combined" format never logs Host at all,
+# so without this override the Host Header / Virtual Host Abuse scenario
+# (feature 10) would have nothing to detect. This is a realistic,
+# common operator customization, not a VANGUARD-specific hack. ---
+COPY lab/victim/nginx-vhost-log.conf /etc/nginx/conf.d/00-vhost-log-format.conf
 
 COPY lab/victim/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

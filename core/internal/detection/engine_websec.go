@@ -411,13 +411,30 @@ func (e *Engine) ruleWebShellIndicator(ev *Event) {
 		return
 	}
 
-	// Web Attack Chain feed-in (Phase 3 correlation extension): a
-	// Web-Shell-Indicator-shaped request is Exploitation-stage evidence
-	// for EvaluateWebAttackChain, regardless of whether dedupe below
-	// ends up suppressing this request's OWN standalone incident (same
-	// rationale as ruleSSRFIndicator's identical feed-in above).
-	e.chain.RecordExploitSignal(ev.SourceIP, ev.Timestamp, thresholds.WebAttackChainWindow)
-	e.ruleWebAttackChain(ev)
+	// Web Attack Chain feed-in (Phase 3 correlation extension): ONLY a
+	// MULTI-SIGNAL match (>= 2 of the 3 independent request-shape
+	// signals) counts as Exploitation-stage evidence for
+	// EvaluateWebAttackChain -- deliberately stricter than the
+	// standalone Web Shell Indicator incident's own any()-based
+	// threshold below. A single weak signal alone (e.g. an ordinary
+	// ".php" extension hit) is common enough in completely unrelated
+	// traffic -- including, concretely, Scenario A's own web-probing
+	// stage in lab/run-tests.sh, which requests "/phpmyadmin/index.php"
+	// as one of its ordinary 404 recon probes -- that treating it as
+	// "exploitation" would let a routine, ordinary-severity request
+	// masquerade as the Web Attack Chain's final stage, potentially
+	// completing (or corrupting the intended ordering of) a chain that
+	// has not genuinely progressed to exploitation at all. Requiring at
+	// least two independent signals together (e.g. extension + upload
+	// path, or extension + suspicious query param) keeps this feed-in
+	// aligned with what the phrase "Exploitation stage" is actually
+	// supposed to mean, without changing the standalone incident's own
+	// (deliberately lenient, single-signal-triggers-a-LOW/MEDIUM-finding)
+	// behavior at all.
+	if sig.count() >= 2 {
+		e.chain.RecordExploitSignal(ev.SourceIP, ev.Timestamp, thresholds.WebAttackChainWindow)
+		e.ruleWebAttackChain(ev)
+	}
 
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentWebShellIndicator) {
 		return
