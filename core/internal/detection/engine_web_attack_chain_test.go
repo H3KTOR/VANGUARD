@@ -283,3 +283,61 @@ func TestWebAttackChain_DoesNotRequireRegularAttackChainToAlsoFire(t *testing.T)
 		}
 	}
 }
+
+// TestWebAttackChain_SingleWeakSignalWebShellPath_DuringWebProbing_DoesNotPrematurelyFeedExploitStage
+// is a regression test for a real bug found by the Docker lab's end-to-end
+// run (lab/run-tests.sh Scenario A's own web-probing stage legitimately
+// requests "/phpmyadmin/index.php" as one of its ordinary 404 recon
+// probes -- an entirely unremarkable path that happens to end in ".php",
+// classifyWebShellRequest's WEAKEST single signal). Before the fix,
+// ruleWebShellIndicator fed ANY sig.any()-shaped match into
+// RecordExploitSignal, so this single ordinary web-probing request was
+// wrongly recorded as Exploitation-stage evidence BEFORE the auth-probing
+// stage even happened, permanently corrupting the required
+// web -> auth -> exploit sequence for that attack window and causing the
+// Web Attack Chain scenario to never fire even after a genuine
+// multi-signal web-shell request arrived later. The fix requires >= 2 of
+// the 3 independent signals (see ruleWebShellIndicator's doc comment) to
+// count as Exploitation-stage evidence, while leaving the standalone Web
+// Shell Indicator incident's own single-signal-triggers-a-LOW/MEDIUM-
+// finding behavior completely unchanged.
+func TestWebAttackChain_SingleWeakSignalWebShellPath_DuringWebProbing_DoesNotPrematurelyFeedExploitStage(t *testing.T) {
+	e, db := testEngine(t)
+	ip := "203.0.113.181"
+	base := time.Now().UTC()
+
+	// Web-probing stage: one of the requests is "/phpmyadmin/index.php"
+	// -- a single-signal (extension-only) web-shell-shaped path, exactly
+	// like the real lab scenario that exposed this bug.
+	webTS := base
+	paths := []string{"/wp-login.php", "/phpmyadmin/index.php", "/.env"}
+	for i, p := range paths {
+		e.IngestWebLogLine(formatWebLine(ip, webTS.Add(time.Duration(i)*time.Second), p, 404, "curl/8.0"))
+	}
+
+	// Auth-probing stage, well after the web-probing stage.
+	authTS := webTS.Add(30 * time.Second)
+	for i := 0; i < thresholds.WebAttackChainMinAuthFailures; i++ {
+		e.IngestAuthLogLine(formatAuthFailedLine(ip, authTS.Add(time.Duration(i)*time.Second), i))
+	}
+
+	// At this point NO genuine multi-signal exploitation-stage request
+	// has occurred yet -- only the incidental single-signal ".php" hit
+	// during web-probing. The chain must NOT have matched from that
+	// alone.
+	incidentsBeforeExploit, _ := db.ListIncidents(database.IncidentFilter{SourceIP: ip})
+	if found := findWebAttackChain(incidentsBeforeExploit); found != nil {
+		t.Fatalf("did not expect a %s incident from a single-signal web-probing-stage \".php\" path alone (before any real exploitation-stage request)", database.IncidentWebAttackChain)
+	}
+
+	// NOW a genuine multi-signal (upload-path + suspicious query param +
+	// extension) exploitation-stage request arrives, strictly after the
+	// auth-probing stage -- the chain should complete correctly.
+	exploitTS := authTS.Add(30 * time.Second)
+	e.IngestWebLogLine(formatWebLine(ip, exploitTS, "/uploads/shell.php?cmd=whoami", 200, "curl/8.0"))
+
+	incidentsAfterExploit, _ := db.ListIncidents(database.IncidentFilter{SourceIP: ip})
+	if found := findWebAttackChain(incidentsAfterExploit); found == nil {
+		t.Fatalf("expected a %s incident once a genuine multi-signal exploitation-stage request arrived in correct order, got types: %+v", database.IncidentWebAttackChain, incidentTypes(incidentsAfterExploit))
+	}
+}
