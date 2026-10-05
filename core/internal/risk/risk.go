@@ -88,6 +88,51 @@ var BaseSeverity = map[database.IncidentType]int{
 	database.IncidentHTTPProtocolAnomaly:       25, // LOW/MEDIUM boundary: malformed HTTP is extremely common from broken clients and casual scanners
 	database.IncidentRequestSmugglingIndicator: 40, // MEDIUM: symptom-only (status-code-sequence) evidence, explicitly not confirmed smuggling
 	database.IncidentAPIAbuse:                  35, // MEDIUM: endpoint-enumeration-shaped traffic; frequency/ratio components push it higher via the standard formula
+
+	// --- System Posture & Drift Detection (Phase 4) ---
+	// Every base value below is deliberately a MIDPOINT, not a fixed
+	// extreme: the mega-prompt explicitly calls for "contextual
+	// escalation" (via Escalate/EscalationBonus on individual findings,
+	// e.g. a world-writable /etc/shadow, or a 0.0.0.0 listener on a
+	// privileged port) rather than baking the worst case into the base
+	// severity itself. A benign/expected occurrence of any of these
+	// four signatures should land LOW/MEDIUM; only a genuinely
+	// dangerous instance should reach HIGH/CRITICAL, and it does so via
+	// risk.Input.Escalate, never by raising the table value below.
+	//
+	// IncidentConfigurationPosture: a CURRENTLY-unsafe state (unexpected
+	// world-writable sensitive config, ownership mismatch). Base is
+	// MEDIUM because "currently unsafe" is already more actionable than
+	// a single stray log line, but a specific check still escalates
+	// (Critical=true) for e.g. a world-writable /etc/shadow or
+	// /etc/sudoers -- see hostsec/posture.go's per-check EscalationNote.
+	database.IncidentConfigurationPosture: 45,
+
+	// IncidentConfigurationDrift: an ORDINARY monitored-resource change
+	// (mode/owner/group/content) is routine system administration most
+	// of the time (a package upgrade touching a config file, an admin
+	// editing sshd_config) -- base is LOW/MEDIUM. Escalates to
+	// Critical=true only when the specific resource is itself
+	// security-authentication-relevant (see hostsec/config_drift.go's
+	// criticalDriftPaths, mirroring FIM's criticalFIMPaths pattern).
+	database.IncidentConfigurationDrift: 35,
+
+	// IncidentListeningServiceDrift: base reflects "a new/changed
+	// listener was observed", which by itself is often entirely benign
+	// (a service restarting, an admin starting a legitimate tool).
+	// Escalates when the listener binds 0.0.0.0/[::] (vs. loopback-only,
+	// which stays at or below base), uses a privileged port, or has no
+	// process identity resolvable at all -- see hostsec/listening.go's
+	// risk-contextualization logic.
+	database.IncidentListeningServiceDrift: 40,
+
+	// IncidentPackageDrift: base reflects an ORDINARY package change
+	// (install/update), the overwhelmingly common case on any
+	// actively-maintained host. Escalates for removal of a
+	// security-sensitive watched package, a version DOWNGRADE, or an
+	// install from the configured high-risk-pattern list -- see
+	// hostsec/package_drift.go's classification.
+	database.IncidentPackageDrift: 30,
 }
 
 // Breakdown documents how a RiskScore was derived. Every detector (real or

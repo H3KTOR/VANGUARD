@@ -288,6 +288,57 @@ const (
 	// than either "many requests to ONE path" (HTTP Flood) or "many 404s
 	// on a small fixed sensitive-path list" (Web Dir Scan).
 	IncidentAPIAbuse IncidentType = "api_abuse"
+
+	// --- System Posture & Drift Detection (VANGUARD Mega Expansion,
+	// Phase 4). All four signatures below are host-local findings
+	// (SourceIP=HostLocalIP, same rationale as every Phase 1/2 hostsec
+	// incident type above) produced by internal/hostsec's periodic
+	// scanners and routed through the identical ReportHostFinding ->
+	// createIncident() pipeline -- no new incident plumbing, only four
+	// new type labels. ---
+
+	// IncidentConfigurationPosture: a single point-in-time posture check
+	// (dangerous filesystem permissions, unexpected sensitive-file
+	// ownership, or a bounded service-configuration check) found the
+	// CURRENT state to already be unsafe, independent of whether it has
+	// ever changed. This is an "is this currently dangerous" signal, not
+	// a "did this change" signal -- see IncidentConfigurationDrift for
+	// the latter. A missing optional monitored path is never itself a
+	// posture finding (see hostsec/posture.go).
+	IncidentConfigurationPosture IncidentType = "configuration_posture"
+
+	// IncidentConfigurationDrift: a monitored configuration
+	// resource's baseline-comparable state (existence, mode, owner,
+	// group, content hash or size when hashing was skipped) changed
+	// since the last-known-good baseline. Distinct from
+	// IncidentConfigurationPosture: drift says "this changed", posture
+	// says "this is currently unsafe" -- a resource can drift into a
+	// perfectly safe new state (no posture finding) or drift into an
+	// unsafe one (both fire, independently, from their own detectors).
+	// First-observation (cold-start baseline establishment) never fires
+	// this; only a genuine change relative to an established baseline
+	// does.
+	IncidentConfigurationDrift IncidentType = "configuration_drift"
+
+	// IncidentListeningServiceDrift: the set of listening (not
+	// transient/connected) sockets observed via /proc/net/{tcp,tcp6,udp,
+	// udp6} changed relative to the established baseline -- a new
+	// listener appeared, a previously-seen one disappeared, or an
+	// existing one's protocol/bind-address/port/owning-process changed.
+	// A configurable baseline-initialization grace period (see
+	// thresholds.ListeningServiceGracePeriod) prevents a storm of
+	// "new listener" findings during VANGUARD's own startup window.
+	IncidentListeningServiceDrift IncidentType = "listening_service_drift"
+
+	// IncidentPackageDrift: the dpkg package inventory (name+architecture
+	// identity, version, install state) changed relative to the
+	// established baseline -- installed, removed, or version/state
+	// changed. Never fires for the bulk first-scan inventory itself,
+	// only for an actual delta on a later scan. Self-disables
+	// gracefully (no incidents, no fabricated "all packages removed")
+	// when /var/lib/dpkg/status is unavailable or unparseable -- see
+	// hostsec/package_drift.go.
+	IncidentPackageDrift IncidentType = "package_drift"
 )
 
 // HostLocalIP is the sentinel SourceIP value used for every host-security
@@ -515,6 +566,38 @@ const (
 	// the same short-lived process pattern recurring doesn't flood
 	// incidents once it has already been reported.
 	BaselineProcess HostBaselineCategory = "process"
+
+	// --- System Posture & Drift Detection (VANGUARD Mega Expansion,
+	// Phase 4). Four new disjoint key spaces in the SAME HostFileBaseline
+	// table -- no second storage engine, no new tables, per the
+	// mega-prompt's explicit "reuse the existing baseline abstraction"
+	// requirement. ---
+
+	// BaselineConfigPosture: Category=config_posture, Key="<check_id>:<path>".
+	// One row per (posture check, monitored path) pair, storing the
+	// most recently observed/expected/severity state purely so repeated
+	// identical findings can be deduped -- NOT a "did it change" diff
+	// (that is BaselineConfigDrift's job). See hostsec/posture.go.
+	BaselineConfigPosture HostBaselineCategory = "config_posture"
+
+	// BaselineConfigDrift: Category=config_drift, Key=absolute resource
+	// path. One row per monitored configuration resource, storing a
+	// fileMeta-shaped snapshot (existence/mode/uid/gid/size/hash, with
+	// hash omitted and HashSkipped=true above the configured size
+	// limit). See hostsec/config_drift.go.
+	BaselineConfigDrift HostBaselineCategory = "config_drift"
+
+	// BaselineListeningService: Category=listening_service, Key=a stable
+	// normalized socket identity ("<protocol>:<address>:<port>", e.g.
+	// "tcp:0.0.0.0:22" or "tcp6:[::]:22" -- deliberately NOT merged
+	// across address families, see hostsec/listening.go's normalization
+	// doc comment). One row per observed listening socket.
+	BaselineListeningService HostBaselineCategory = "listening_service"
+
+	// BaselinePackage: Category=package, Key="<name>:<architecture>".
+	// One row per installed package identity. See
+	// hostsec/package_drift.go.
+	BaselinePackage HostBaselineCategory = "package"
 )
 
 // HostFileBaseline is a single last-known-good snapshot used by the Host

@@ -563,3 +563,166 @@ var RequestSmugglingSymptomStatusCodes = map[int]bool{
 var AuthEndpointHints = []string{
 	"/login", "/auth", "/token", "/api/", "/oauth", "/signin", "/session",
 }
+
+// ---------------------------------------------------------------------------
+// System Posture & Drift Detection (VANGUARD Mega Expansion, Phase 4):
+// Configuration Posture, Configuration Drift, Listening Service Drift,
+// Package Drift. Same no-eBPF/periodic-scan/bounded-target-list
+// constraints as Phase 1/2 above -- every list here is a small, explicit
+// allowlist, never a filesystem/process/package-database full dump.
+// ---------------------------------------------------------------------------
+
+const (
+	// ConfigPostureScanInterval is how often the Configuration Posture
+	// detector re-evaluates every configured posture check.
+	ConfigPostureScanInterval = 5 * time.Minute
+
+	// ConfigDriftScanInterval is how often monitored configuration
+	// resources are re-snapshotted and diffed against their baseline.
+	ConfigDriftScanInterval = 5 * time.Minute
+
+	// ListeningServiceScanInterval is how often /proc/net/{tcp,tcp6,udp,
+	// udp6} is parsed to rebuild the listening-socket inventory.
+	ListeningServiceScanInterval = 2 * time.Minute
+
+	// PackageDriftScanInterval is how often /var/lib/dpkg/status is
+	// re-read and diffed against the package baseline. Kept relatively
+	// infrequent since package state changes are rare, deliberate
+	// events (not something that needs sub-minute visibility).
+	PackageDriftScanInterval = 10 * time.Minute
+
+	// ConfigDriftMaxHashBytes bounds how large a monitored file may be
+	// before Configuration Drift will SHA-256 it. Files larger than
+	// this are still compared by size/mode/owner/group metadata alone,
+	// with HashSkipped=true explicitly recorded in the baseline entry
+	// (never silently treated as unchanged, never read fully into
+	// memory just to hash). 8 MiB comfortably covers every realistic
+	// text configuration file while categorically excluding logs,
+	// archives, or other large files an operator might mistakenly add
+	// to the watch list.
+	ConfigDriftMaxHashBytes = 8 * 1024 * 1024
+
+	// ListeningServiceGracePeriod: on the very first Listening Service
+	// Drift scan after VANGUARD starts, every socket observed is
+	// silently seeded into the baseline (exactly like every other
+	// hostsec scanner's isFirstScan/markSeeded cold-start pattern) --
+	// this constant exists purely to document the grace-period
+	// CONCEPT for operators/tests; the actual mechanism is the shared
+	// first-scan marker, not a separate timer, so a slow-starting
+	// service is never missed by a race against a wall-clock window.
+	ListeningServiceGracePeriod = 0
+
+	// PrivilegedPortThreshold: a listening port at or below this value
+	// is considered "privileged" (historically required root to bind)
+	// for Listening Service Drift's risk contextualization -- a new
+	// unexpected listener here is weighted higher than an identical one
+	// on a high ephemeral-range port.
+	PrivilegedPortThreshold = 1024
+)
+
+// DefaultConfigPosturePaths are the security-sensitive files/directories
+// checked by the Configuration Posture detector out of the box for
+// dangerous permissions (world-writable) and unexpected ownership.
+// Deliberately the same high-value targets FIM already watches for
+// content/metadata DRIFT -- Posture asks a different question of the
+// identical allowlist ("is this currently unsafe"), not a new list.
+// Operators can extend this via -posture-paths.
+var DefaultConfigPosturePaths = []string{
+	"/etc/passwd",
+	"/etc/shadow",
+	"/etc/group",
+	"/etc/sudoers",
+	"/etc/ssh/sshd_config",
+	"/root/.ssh/authorized_keys",
+	"/etc/crontab",
+}
+
+// DefaultConfigPostureExpectedOwners maps a monitored path to its
+// expected "uid:gid" ownership string. A path with no entry here is
+// still permission-checked (world-writable) but is NOT ownership-checked
+// -- an explicit baseline is required per the mega-prompt's "never
+// assume UID 0 universally" instruction, rather than defaulting every
+// unlisted path to root:root.
+var DefaultConfigPostureExpectedOwners = map[string]string{
+	"/etc/passwd":                "0:0",
+	"/etc/shadow":                "0:0",
+	"/etc/group":                 "0:0",
+	"/etc/sudoers":               "0:0",
+	"/etc/ssh/sshd_config":       "0:0",
+	"/root/.ssh/authorized_keys": "0:0",
+	"/etc/crontab":               "0:0",
+}
+
+// DefaultConfigDriftPaths are the configuration resources monitored for
+// baseline DRIFT (created/deleted/mode/owner/group/content changes) out
+// of the box. A deliberately small, explicit allowlist -- never a
+// filesystem walk -- extendable via -drift-paths.
+var DefaultConfigDriftPaths = []string{
+	"/etc/passwd",
+	"/etc/shadow",
+	"/etc/group",
+	"/etc/sudoers",
+	"/etc/ssh/sshd_config",
+	"/root/.ssh/authorized_keys",
+	"/etc/crontab",
+	"/etc/hosts",
+	"/etc/nginx/nginx.conf",
+}
+
+// CriticalConfigDriftPaths are watched Configuration Drift resources
+// whose any change is escalated to Critical=true outright, mirroring
+// FIM's criticalFIMPaths pattern -- these are the highest-value
+// authentication/access-control targets among DefaultConfigDriftPaths.
+var CriticalConfigDriftPaths = map[string]bool{
+	"/etc/shadow":                true,
+	"/etc/sudoers":               true,
+	"/etc/ssh/sshd_config":       true,
+	"/root/.ssh/authorized_keys": true,
+}
+
+// DefaultExpectedListeners is the out-of-the-box allowlist of listening
+// services Listening Service Drift should treat as expected (never
+// generating a "new listener" finding), expressed as protocol/address-
+// pattern/port triples. "*" matches any address. Operators extend this
+// via -expected-listeners; matching is explicit/deterministic, never
+// auto-trust-on-first-observation (see hostsec/listening.go).
+type ExpectedListener struct {
+	Protocol        string // "tcp", "tcp6", "udp", "udp6", or "*" for any
+	AddressPattern  string // exact bind address, or "*" for any
+	Port            int
+	ProcessNameHint string // optional; empty matches any process
+}
+
+// DefaultExpectedListeners is deliberately small: VANGUARD's own
+// loopback-bound REST API port is the only service this host-security
+// subsystem can assume is always present and legitimate without
+// operator configuration. SSH/HTTP/etc. are expected to be explicitly
+// allowlisted by the operator for their own environment via
+// -expected-listeners, since VANGUARD cannot know in advance which of
+// those a given deployment legitimately runs.
+var DefaultExpectedListeners = []ExpectedListener{
+	{Protocol: "*", AddressPattern: "127.0.0.1", Port: 8080},
+}
+
+// DefaultIgnoredPackages are dpkg package names Package Drift never
+// reports drift for (typically extremely high-churn metadata-only
+// packages). Deliberately a tiny list -- no giant distro-specific
+// blocklist, per the mega-prompt's explicit instruction.
+var DefaultIgnoredPackages = []string{
+	"base-files",
+}
+
+// DefaultWatchedSecurityPackages are dpkg package names whose REMOVAL or
+// DOWNGRADE is escalated to a higher-severity Package Drift finding
+// (Critical=true), since losing or regressing one of these has direct
+// security impact. Deliberately a small, high-value set, not a full
+// distro security-package catalog.
+var DefaultWatchedSecurityPackages = []string{
+	"openssh-server",
+	"openssh-client",
+	"sudo",
+	"iptables",
+	"ufw",
+	"libssl3",
+	"libssl1.1",
+}
