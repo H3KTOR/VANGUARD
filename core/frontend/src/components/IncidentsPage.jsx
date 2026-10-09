@@ -3,18 +3,8 @@ import { Search, ShieldOff, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { usePolling } from '../hooks/usePolling.js'
 import { listIncidents, updateIncidentStatus, blockIncidentIP } from '../api/vanguardClient.js'
 import { SEVERITY_BG } from '../utils/severity.js'
-
-// Pretty-prints an incident's Metadata JSON blob (the structured evidence
-// every detector attaches) for the inspectable evidence row. Falls back to
-// the raw string if it isn't valid JSON.
-function formatEvidence(metadata) {
-  if (!metadata) return 'No structured evidence recorded.'
-  try {
-    return JSON.stringify(JSON.parse(metadata), null, 2)
-  } catch {
-    return metadata
-  }
-}
+import IncidentEvidence from './IncidentEvidence.jsx'
+import DetectorStatusPanel from './DetectorStatusPanel.jsx'
 
 const STATUS_LABEL = {
   open: 'Open',
@@ -53,6 +43,7 @@ export default function IncidentsPage() {
 
   return (
     <div className="p-6 max-w-[1600px] mx-auto space-y-4">
+      <DetectorStatusPanel />
       <div className="flex flex-wrap items-center gap-3">
         <select
           value={statusFilter}
@@ -160,9 +151,7 @@ export default function IncidentsPage() {
               {expandedId === inc.id && (
                 <tr className="bg-slate-50">
                   <td colSpan={7} className="px-4 py-3">
-                    <pre className="max-h-72 overflow-auto rounded-lg bg-slate-900 p-3 text-[11px] leading-relaxed text-slate-100">
-                      {formatEvidence(inc.metadata)}
-                    </pre>
+                    <IncidentEvidence incident={inc} />
                   </td>
                 </tr>
               )}

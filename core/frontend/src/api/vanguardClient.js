@@ -167,8 +167,20 @@ export function getIncident(id) {
   return request(`/incidents/${id}`)
 }
 
-export function updateIncidentStatus(id, status) {
-  return request(`/incidents/${id}/status`, { method: 'PUT', body: { status } })
+export function updateIncidentStatus(id, status, reason) {
+  return request(`/incidents/${id}/status`, { method: 'PUT', body: reason ? { status, reason } : { status } })
+}
+
+export function getIncidentEvents(id) {
+  return request(`/incidents/${id}/events`)
+}
+
+export function getResponsePlan(id) {
+  return request(`/incidents/${id}/response-plan`)
+}
+
+export function getDetectorStatus() {
+  return request('/detectors/status')
 }
 
 export function blockIncidentIP(id, durationMinutes) {
@@ -264,6 +276,9 @@ export default {
   listIncidents,
   getIncident,
   updateIncidentStatus,
+  getIncidentEvents,
+  getResponsePlan,
+  getDetectorStatus,
   blockIncidentIP,
   listFirewallRules,
   manualBlock,
