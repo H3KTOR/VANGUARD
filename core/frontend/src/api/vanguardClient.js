@@ -266,6 +266,18 @@ export function getRuleGuidance() {
   return request('/rules/guidance')
 }
 
+export function listBackups() {
+  return request('/backup')
+}
+
+export function createBackup(body = {}) {
+  return request('/backup', { method: 'POST', body })
+}
+
+export function verifyBackup(name) {
+  return request(`/backup/${encodeURIComponent(name)}/verify`)
+}
+
 export function getRuntimeHealth() {
   return request('/health/runtime')
 }
@@ -371,6 +383,9 @@ export default {
   getResponsePlan,
   getDetectorStatus,
   getRuntimeHealth,
+  listBackups,
+  createBackup,
+  verifyBackup,
   listRules,
   getTuning,
   previewTuning,

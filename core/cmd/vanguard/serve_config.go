@@ -52,7 +52,9 @@ type serveConfig struct {
 	// internal/hostsec/manager.go. ---
 	EnableHostSecurity bool
 	// EnableIntel turns local IOC matching on/off (Phase 6).
-	EnableIntel   bool
+	EnableIntel bool
+	// BackupDir is the directory API-created backups are written to.
+	BackupDir     string
 	FIMPaths      []string
 	SUIDScanRoots []string
 	// BinaryPaths (Mega Expansion, Phase 2, Feature 8: System Binary
@@ -113,6 +115,7 @@ func parseServeFlags(args []string) serveConfig {
 	suidRoots := fs.String("suid-roots", envOr("VANGUARD_SUID_ROOTS", ""), "Comma-separated list of additional directories to scan for SUID/SGID binaries (appended to the built-in defaults)")
 	binaryPaths := fs.String("binary-paths", envOr("VANGUARD_BINARY_PATHS", ""), "Comma-separated list of additional security-critical binaries for System Binary Integrity monitoring (appended to the built-in defaults)")
 
+	backupDir := fs.String("backup-dir", envOr("VANGUARD_BACKUP_DIR", ""), "Directory for backups created via the API/dashboard (default: <db dir>/backups)")
 	enableIntel := fs.Bool("intel", true, "Enable local (offline) threat-intelligence IOC matching")
 	systemPosture := fs.Bool("system-posture", true, "Enable Phase 4 System Posture detectors (configuration posture/drift, listening-service drift, package drift)")
 	postureInterval := fs.Duration("posture-interval", envDuration("VANGUARD_POSTURE_INTERVAL"), "Override the scan interval of every Phase 4 detector (0 = per-detector defaults; minimum 1s)")
@@ -162,6 +165,7 @@ func parseServeFlags(args []string) serveConfig {
 
 		EnableHostSecurity: *enableHostSecurity,
 		EnableIntel:        *enableIntel,
+		BackupDir:          *backupDir,
 		FIMPaths:           append(append([]string{}, thresholds.DefaultFIMPaths...), splitAndTrim(*fimPaths)...),
 		SUIDScanRoots:      append(append([]string{}, thresholds.DefaultSUIDScanRoots...), splitAndTrim(*suidRoots)...),
 		BinaryPaths:        append(append([]string{}, thresholds.DefaultSystemBinaryPaths...), splitAndTrim(*binaryPaths)...),

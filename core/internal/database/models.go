@@ -669,6 +669,7 @@ func AllModels() []any {
 		&IOCMatch{},
 		&IncidentNote{},
 		&RuleTuningRevision{},
+		&BackupAudit{},
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -21,6 +22,7 @@ import (
 
 	"vanguard/core/internal/api"
 	"vanguard/core/internal/auth"
+	"vanguard/core/internal/backup"
 	"vanguard/core/internal/database"
 	"vanguard/core/internal/detection"
 	"vanguard/core/internal/firewall"
@@ -188,6 +190,16 @@ func buildApp(cfg serveConfig) (*app, error) {
 	}
 	echoSrv.Intel = iocMatcher
 	echoSrv.Tuning = tuningStore
+	echoSrv.BackupDir = cfg.BackupDir
+	if echoSrv.BackupDir == "" {
+		echoSrv.BackupDir = filepath.Join(filepath.Dir(cfg.DBPath), "backups")
+	}
+	// A database written by a NEWER VANGUARD is not refused (that would turn
+	// a harmless extra index into an outage) but it is called out loudly:
+	// downgrade is unsupported.
+	if w := backup.SchemaWarnings(db); len(w) > 0 {
+		log.Printf("[serve] WARNING: the database contains schema elements this version does not know (%v); it was probably written by a newer VANGUARD and downgrading is unsupported", w)
+	}
 	echoSrv.RuleCtx = rules.Context{
 		HostSecurity: cfg.EnableHostSecurity, SystemPosture: cfg.SystemPosture.Enabled, Intel: cfg.EnableIntel,
 		Honeypot: cfg.EnableHoneypot, MinRiskToBan: fwCfg.MinRiskScoreToBan, AutopilotActive: fwCfg.Enabled,

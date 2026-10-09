@@ -69,6 +69,9 @@ func decodeStrict(c echo.Context, v any) error {
 	if err != nil || len(b) > maxTuningBody {
 		return echo.NewHTTPError(http.StatusRequestEntityTooLarge, "request body too large")
 	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return nil // an empty body means "all defaults" (every field is optional)
+	}
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {

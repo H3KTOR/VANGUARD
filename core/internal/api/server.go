@@ -46,6 +46,10 @@ type Server struct {
 	Tuning *tuning.Store
 	// RuleCtx carries the runtime facts the rule inventory reflects.
 	RuleCtx rules.Context
+
+	// BackupDir is where API-created backups are written (empty = backups
+	// are not configured for the API).
+	BackupDir string
 }
 
 // DetectorStatusSource is implemented by *hostsec.Manager.
@@ -89,6 +93,9 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.PUT("/incidents/:id/status", s.handleUpdateIncidentStatus)
 	protected.GET("/detectors/status", s.handleDetectorStatus)
 	protected.GET("/health/runtime", s.handleRuntimeHealth)
+	protected.GET("/backup", s.handleListBackups)
+	protected.POST("/backup", s.handleCreateBackup)
+	protected.GET("/backup/:name/verify", s.handleVerifyBackup)
 	protected.GET("/rules", s.handleListRules)
 	protected.GET("/rules/tuning", s.handleGetTuning)
 	protected.POST("/rules/tuning/preview", s.handlePreviewTuning)

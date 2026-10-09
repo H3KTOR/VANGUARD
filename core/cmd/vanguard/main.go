@@ -40,6 +40,8 @@ func main() {
 		runSimulateCmd(os.Args[2:])
 	case "intel":
 		runIntelCmd(os.Args[2:])
+	case "backup":
+		runBackupCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -56,6 +58,7 @@ Usage:
   vanguard serve [flags]                 Run the full monitoring daemon + REST API/dashboard
   vanguard simulate <scenario> [flags]   Run a safe, synthetic attack simulation
   vanguard intel import|list [flags]     Manage local threat-intelligence indicators (offline)
+  vanguard backup create|list|verify|restore   Consistent local backups; restore is offline-only
   vanguard help                          Show this message
 
 Serve flags:

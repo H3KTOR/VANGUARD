@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { getFirewallStatus } from '../api/vanguardClient.js'
 import { usePolling } from '../hooks/usePolling.js'
+import BackupPanel from './BackupPanel.jsx'
 
 export default function SettingsPage({ user }) {
   const { data, loading } = usePolling(getFirewallStatus, 15000)
@@ -31,6 +32,7 @@ export default function SettingsPage({ user }) {
           {data?.status || 'No status available.'}
         </pre>
       </div>
+      {user && user.role === 'admin' && <BackupPanel />}
     </div>
   )
 }
