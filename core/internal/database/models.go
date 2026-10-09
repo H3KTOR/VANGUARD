@@ -668,6 +668,7 @@ func AllModels() []any {
 		&IOCImport{},
 		&IOCMatch{},
 		&IncidentNote{},
+		&RuleTuningRevision{},
 	}
 }
 

@@ -13,6 +13,7 @@ import FirewallPage from './components/FirewallPage.jsx'
 import HoneypotPage from './components/HoneypotPage.jsx'
 import MetricsPage from './components/MetricsPage.jsx'
 import IntelPage from './components/IntelPage.jsx'
+import RulesPage from './components/RulesPage.jsx'
 import RuntimeHealthBanner from './components/RuntimeHealthBanner.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
 
@@ -96,6 +97,7 @@ export default function App() {
           {page === 'firewall' && <FirewallPage />}
           {page === 'honeypot' && <HoneypotPage />}
           {page === 'intel' && <IntelPage />}
+          {page === 'rules' && <RulesPage user={user} />}
           {page === 'metrics' && <MetricsPage />}
           {page === 'settings' && <SettingsPage user={user} />}
         </main>

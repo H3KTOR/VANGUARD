@@ -57,6 +57,7 @@ type Engine struct {
 	dedupe    *dedupeWindow
 	ioc       IOCMatcher        // Phase 6: nil when no intelligence is configured
 	iocDedupe *dedupeWindow     // Phase 6: long cooldown per (indicator, actor, field)
+	tuning    TuningSource      // Phase 10: effective tunable thresholds
 	chain     *ChainTracker     // Task 3: cross-signal attack-chain correlation state
 	scanner   *ScannerTracker   // Task 3: web-scanner-behavior heuristic state
 	hostCor   *HostCorrelator   // Mega Expansion Phase 2, Feature 7: process/file/network correlation state
@@ -85,6 +86,9 @@ type Config struct {
 	// IOC, when set, enables exact local threat-indicator matching
 	// (Phase 6). Optional; nil disables it entirely.
 	IOC IOCMatcher
+	// Tuning supplies the operator-tunable thresholds (Phase 10). Optional;
+	// nil means the compiled defaults.
+	Tuning TuningSource
 }
 
 // NewEngine constructs a detection Engine bound to db.
@@ -106,6 +110,7 @@ func NewEngine(cfg Config) *Engine {
 		webP:      NewWebLogParser(),
 		dedupe:    newDedupeWindow(2 * time.Minute),
 		ioc:       cfg.IOC,
+		tuning:    tuningOrDefault(cfg.Tuning),
 		iocDedupe: newDedupeWindow(thresholds.IOCMatchCooldown),
 		chain:     NewChainTracker(cfg.MaxIdle),
 		scanner:   NewScannerTracker(cfg.MaxIdle),
@@ -291,8 +296,9 @@ func (e *Engine) handleEvent(ev *Event) {
 // ---------------------------------------------------------------------------
 
 func (e *Engine) ruleSSHBruteForce(ev *Event) {
+	tv := e.tuning.Values()
 	count := e.state.RecordSSHFailure(ev.SourceIP, ev.Timestamp, thresholds.SSHBruteForceWindow)
-	if count <= thresholds.SSHBruteForceMinAttempts {
+	if count <= tv.SSHBruteForceMinAttempts {
 		return
 	}
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentSSHBruteForce) {
@@ -302,7 +308,7 @@ func (e *Engine) ruleSSHBruteForce(ev *Event) {
 	breakdown := risk.Score(risk.Input{
 		Type:                database.IncidentSSHBruteForce,
 		EventCount:          count,
-		Threshold:           thresholds.SSHBruteForceMinAttempts,
+		Threshold:           tv.SSHBruteForceMinAttempts,
 		MaxFrequencyBonus:   30,
 		RecentIncidentCount: e.recentCount(ev.SourceIP),
 		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
@@ -310,6 +316,7 @@ func (e *Engine) ruleSSHBruteForce(ev *Event) {
 
 	e.createIncident(database.IncidentSSHBruteForce, ev, count, breakdown, map[string]any{
 		"window_seconds": int(thresholds.SSHBruteForceWindow.Seconds()),
+		"rule":           e.explain("count > threshold", count, ">", tv.SSHBruteForceMinAttempts, thresholds.SSHBruteForceWindow),
 		"last_username":  ev.Username,
 		"sample_line":    ev.RawLine,
 	})
@@ -320,8 +327,9 @@ func (e *Engine) ruleSSHBruteForce(ev *Event) {
 // ---------------------------------------------------------------------------
 
 func (e *Engine) ruleFailedThenSuccess(ev *Event) {
+	tv := e.tuning.Values()
 	failedBefore, escalate := e.state.RecordSSHSuccess(
-		ev.SourceIP, ev.Timestamp, thresholds.FailedThenSuccessWindow, thresholds.FailedThenSuccessMinFailed)
+		ev.SourceIP, ev.Timestamp, thresholds.FailedThenSuccessWindow, tv.FailedThenSuccessMinFailed)
 	if !escalate {
 		return
 	}
@@ -332,7 +340,7 @@ func (e *Engine) ruleFailedThenSuccess(ev *Event) {
 	breakdown := risk.Score(risk.Input{
 		Type:                database.IncidentFailedThenSuccess,
 		EventCount:          failedBefore,
-		Threshold:           thresholds.FailedThenSuccessMinFailed,
+		Threshold:           tv.FailedThenSuccessMinFailed,
 		MaxFrequencyBonus:   20,
 		RecentIncidentCount: e.recentCount(ev.SourceIP),
 		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
@@ -341,6 +349,7 @@ func (e *Engine) ruleFailedThenSuccess(ev *Event) {
 	})
 
 	e.createIncident(database.IncidentFailedThenSuccess, ev, failedBefore, breakdown, map[string]any{
+		"rule":                           e.explain("failures before success >= threshold", failedBefore, ">=", tv.FailedThenSuccessMinFailed, thresholds.FailedThenSuccessWindow),
 		"failed_attempts_before_success": failedBefore,
 		"successful_username":            ev.Username,
 		"sample_line":                    ev.RawLine,
@@ -352,8 +361,9 @@ func (e *Engine) ruleFailedThenSuccess(ev *Event) {
 // ---------------------------------------------------------------------------
 
 func (e *Engine) rulePortScan(ev *Event) {
+	tv := e.tuning.Values()
 	distinct := e.state.RecordPortTouch(ev.SourceIP, ev.Port, ev.Timestamp, thresholds.PortScanWindow)
-	if distinct <= thresholds.PortScanDistinctPorts {
+	if distinct <= tv.PortScanDistinctPorts {
 		return
 	}
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentPortScan) {
@@ -363,7 +373,7 @@ func (e *Engine) rulePortScan(ev *Event) {
 	breakdown := risk.Score(risk.Input{
 		Type:                database.IncidentPortScan,
 		EventCount:          distinct,
-		Threshold:           thresholds.PortScanDistinctPorts,
+		Threshold:           tv.PortScanDistinctPorts,
 		MaxFrequencyBonus:   25,
 		RecentIncidentCount: e.recentCount(ev.SourceIP),
 		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
@@ -371,6 +381,7 @@ func (e *Engine) rulePortScan(ev *Event) {
 
 	e.createIncident(database.IncidentPortScan, ev, distinct, breakdown, map[string]any{
 		"window_seconds": int(thresholds.PortScanWindow.Seconds()),
+		"rule":           e.explain("distinct ports > threshold", distinct, ">", tv.PortScanDistinctPorts, thresholds.PortScanWindow),
 		"last_port":      ev.Port,
 	})
 }
@@ -383,8 +394,9 @@ func (e *Engine) ruleWebDirScan(ev *Event) {
 	if ev.StatusCode != 404 || !isSensitivePath(ev.Path) {
 		return
 	}
+	tv := e.tuning.Values()
 	count := e.state.RecordSensitive404(ev.SourceIP, ev.Timestamp, thresholds.WebDirScanWindow)
-	if count < thresholds.WebDirScanMin404s {
+	if count < tv.WebDirScanMin404s {
 		return
 	}
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentWebDirScan) {
@@ -394,7 +406,7 @@ func (e *Engine) ruleWebDirScan(ev *Event) {
 	breakdown := risk.Score(risk.Input{
 		Type:                database.IncidentWebDirScan,
 		EventCount:          count,
-		Threshold:           thresholds.WebDirScanMin404s,
+		Threshold:           tv.WebDirScanMin404s,
 		MaxFrequencyBonus:   20,
 		RecentIncidentCount: e.recentCount(ev.SourceIP),
 		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
@@ -403,6 +415,7 @@ func (e *Engine) ruleWebDirScan(ev *Event) {
 	e.createIncident(database.IncidentWebDirScan, ev, count, breakdown, map[string]any{
 		"last_path":      ev.Path,
 		"user_agent":     ev.UserAgent,
+		"rule":           e.explain("sensitive-path 404s >= threshold", count, ">=", tv.WebDirScanMin404s, thresholds.WebDirScanWindow),
 		"window_seconds": int(thresholds.WebDirScanWindow.Seconds()),
 	})
 }
@@ -473,8 +486,9 @@ func (e *Engine) ruleSQLiXSS(ev *Event) {
 // ---------------------------------------------------------------------------
 
 func (e *Engine) ruleHTTPFlood(ev *Event) {
+	tv := e.tuning.Values()
 	count := e.state.RecordHTTPRequest(ev.SourceIP, ev.Timestamp, thresholds.HTTPFloodWindow)
-	if count <= thresholds.HTTPFloodMaxRequests {
+	if count <= tv.HTTPFloodMaxRequests {
 		return
 	}
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentHTTPFlood) {
@@ -484,13 +498,14 @@ func (e *Engine) ruleHTTPFlood(ev *Event) {
 	breakdown := risk.Score(risk.Input{
 		Type:                database.IncidentHTTPFlood,
 		EventCount:          count,
-		Threshold:           thresholds.HTTPFloodMaxRequests,
+		Threshold:           tv.HTTPFloodMaxRequests,
 		MaxFrequencyBonus:   25,
 		RecentIncidentCount: e.recentCount(ev.SourceIP),
 		ThreatIntelHit:      e.intel.IsMalicious(ev.SourceIP),
 	})
 
 	e.createIncident(database.IncidentHTTPFlood, ev, count, breakdown, map[string]any{
+		"rule":           e.explain("requests > threshold", count, ">", tv.HTTPFloodMaxRequests, thresholds.HTTPFloodWindow),
 		"window_seconds": int(thresholds.HTTPFloodWindow.Seconds()),
 	})
 }

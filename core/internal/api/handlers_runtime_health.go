@@ -141,6 +141,14 @@ func (s *Server) runtimeComponents(ctx context.Context, now time.Time) []health.
 		out = append(out, c)
 	}
 
+	if s.Tuning != nil {
+		c := health.Component{Name: "rule_tuning", State: health.Healthy, Counters: map[string]uint64{"revision": uint64(s.Tuning.Revision())}}
+		if e := s.Tuning.LoadError(); e != "" {
+			c.State, c.Detail = health.Degraded, health.Sanitize("stored tuning ignored, compiled defaults in effect: "+e)
+		}
+		out = append(out, c)
+	}
+
 	if s.Engine != nil {
 		out = append(out, health.Component{Name: "detection_engine", State: health.Healthy,
 			Counters: map[string]uint64{"dedupe_keys": uint64(s.Engine.DedupeLen())}})

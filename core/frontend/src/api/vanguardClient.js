@@ -242,6 +242,30 @@ export async function exportIncident(id) {
   return res.text()
 }
 
+export function listRules() {
+  return request('/rules')
+}
+
+export function getTuning() {
+  return request('/rules/tuning')
+}
+
+export function previewTuning(values) {
+  return request('/rules/tuning/preview', { method: 'POST', body: { values } })
+}
+
+export function applyTuning(body) {
+  return request('/rules/tuning', { method: 'PUT', body })
+}
+
+export function rollbackTuning(body) {
+  return request('/rules/tuning/rollback', { method: 'POST', body })
+}
+
+export function getRuleGuidance() {
+  return request('/rules/guidance')
+}
+
 export function getRuntimeHealth() {
   return request('/health/runtime')
 }
@@ -347,6 +371,12 @@ export default {
   getResponsePlan,
   getDetectorStatus,
   getRuntimeHealth,
+  listRules,
+  getTuning,
+  previewTuning,
+  applyTuning,
+  rollbackTuning,
+  getRuleGuidance,
   getIncidentTimeline,
   getIncidentGraph,
   listNotes,

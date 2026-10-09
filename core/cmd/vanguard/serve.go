@@ -30,7 +30,9 @@ import (
 	"vanguard/core/internal/intel"
 	"vanguard/core/internal/metrics"
 	"vanguard/core/internal/notify"
+	"vanguard/core/internal/rules"
 	"vanguard/core/internal/simulator"
+	"vanguard/core/internal/tuning"
 )
 
 // runServeCmd is the entry point for `vanguard serve`. It parses flags,
@@ -124,6 +126,11 @@ func buildApp(cfg serveConfig) (*app, error) {
 	// dormant) reputation bonus for medium/high-confidence IP indicators.
 	var iocMatcher *intel.Matcher
 	detCfg := detection.Config{DB: db, MaxIdle: cfg.StateMaxIdle, Notifier: autopilot}
+	tuningStore := tuning.Load(db)
+	detCfg.Tuning = tuningStore
+	if e := tuningStore.LoadError(); e != "" {
+		log.Printf("[serve] WARNING: %s", e)
+	}
 	if cfg.EnableIntel {
 		iocMatcher = intel.NewMatcher(db)
 		detCfg.IOC = iocMatcher
@@ -180,6 +187,11 @@ func buildApp(cfg serveConfig) (*app, error) {
 		echoSrv.Detectors = hostsecMgr
 	}
 	echoSrv.Intel = iocMatcher
+	echoSrv.Tuning = tuningStore
+	echoSrv.RuleCtx = rules.Context{
+		HostSecurity: cfg.EnableHostSecurity, SystemPosture: cfg.SystemPosture.Enabled, Intel: cfg.EnableIntel,
+		Honeypot: cfg.EnableHoneypot, MinRiskToBan: fwCfg.MinRiskScoreToBan, AutopilotActive: fwCfg.Enabled,
+	}
 	reg := newRuntimeRegistry(cfg)
 	echoSrv.Runtime = api.RuntimeSources{Registry: reg, MetricsInterval: cfg.MetricsInterval}
 	if honeypotSrv != nil {

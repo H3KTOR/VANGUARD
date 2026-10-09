@@ -17,7 +17,9 @@ import (
 	"vanguard/core/internal/firewall"
 	"vanguard/core/internal/hostsec"
 	"vanguard/core/internal/intel"
+	"vanguard/core/internal/rules"
 	"vanguard/core/internal/simulator"
+	"vanguard/core/internal/tuning"
 )
 
 // Server bundles every dependency the HTTP handlers need. Constructed once
@@ -39,6 +41,11 @@ type Server struct {
 
 	// Runtime feeds GET /api/health/runtime (all fields optional).
 	Runtime RuntimeSources
+
+	// Tuning is the operator threshold store (Phase 10; nil = unavailable).
+	Tuning *tuning.Store
+	// RuleCtx carries the runtime facts the rule inventory reflects.
+	RuleCtx rules.Context
 }
 
 // DetectorStatusSource is implemented by *hostsec.Manager.
@@ -82,6 +89,12 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.PUT("/incidents/:id/status", s.handleUpdateIncidentStatus)
 	protected.GET("/detectors/status", s.handleDetectorStatus)
 	protected.GET("/health/runtime", s.handleRuntimeHealth)
+	protected.GET("/rules", s.handleListRules)
+	protected.GET("/rules/tuning", s.handleGetTuning)
+	protected.POST("/rules/tuning/preview", s.handlePreviewTuning)
+	protected.PUT("/rules/tuning", s.handleApplyTuning)
+	protected.POST("/rules/tuning/rollback", s.handleRollbackTuning)
+	protected.GET("/rules/guidance", s.handleRuleGuidance)
 	protected.GET("/intel/status", s.handleIntelStatus)
 	protected.GET("/intel/iocs", s.handleListIOCs)
 	protected.GET("/intel/iocs/:id", s.handleGetIOC)

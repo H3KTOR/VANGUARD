@@ -202,6 +202,14 @@ Details, risk inventory and limits: [docs/PHASE9.md](docs/PHASE9.md). Status: **
 - **Bounds & backpressure**: honeypot connections capped (excess still reported as hits, counted as `shed`), accept-loop backoff, wedged scans abandoned after deadline + grace and never overlapped, duplicate worker starts refused, idempotent shutdown. The dashboard shows a banner only when something is not healthy.
 - **Documented, unchanged gaps**: detection runs synchronously in the tailer (natural backpressure), no per-query timeout, no incident retention policy.
 
+## Phase 10 — Rule Inventory, Explainability & Safe Tuning
+
+Design, limits and acceptance: [docs/PHASE10.md](docs/PHASE10.md). Status: **Implemented — Verification Pending**.
+
+- **Inventory** (`GET /api/rules`, Detection Rules page): every rule with base severity, evidence kind, prerequisites, limitations, effective settings **with their source**, enabled state (which startup flag controls it) and whether it could ever reach automatic blocking (an upper-bound statement). A test fails if a declared incident type is missing.
+- **Safe tuning** for five integer thresholds only (SSH brute force, failed→success, port scan, directory scan, HTTP flood): fixed ranges, no code/expression input, preview that changes nothing, admin-only apply with an explicit acknowledgement when a change makes a rule *less* sensitive, compare-and-swap revisions, append-only audit history with the authenticated actor, rollback as a new revision, and a corrupt stored revision is ignored loudly (defaults + degraded health) without locking the operator out. Nothing is applied automatically and no rule can be disabled.
+- **Explainable incidents**: the tunable rules record the condition, observed value, applied threshold and its source next to the existing provenance/limitations. **Guidance** (`/api/rules/guidance`) reports analyst-labelled counts only and never claims precision or recall.
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.

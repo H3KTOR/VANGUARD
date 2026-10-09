@@ -6,6 +6,7 @@ const TITLES = {
   incidents: ['Incidents', 'Full detection history & triage queue'],
   firewall: ['Firewall Rules', 'Active bans, whitelist, and manual controls'],
   honeypot: ['Honeypot', 'Decoy service activity'],
+  rules: ['Detection Rules', 'Inspect rules, effective thresholds and audited tuning'],
   intel: ['Threat Intel', 'Local indicators, import & bounded hunting'],
   metrics: ['System Metrics', 'Host resource utilization over time'],
   settings: ['Settings', 'Account & platform configuration'],

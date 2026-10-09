@@ -47,9 +47,9 @@ var correlatedTypes = map[database.IncidentType]bool{
 	database.IncidentHighConfidenceCompromise: true,
 }
 
-// limitationFor returns a short, honest statement of what the detector
+// LimitationFor returns a short, honest statement of what the detector
 // can and cannot establish. Empty for types without a specific note.
-func limitationFor(t database.IncidentType) string {
+func LimitationFor(t database.IncidentType) string {
 	switch t {
 	case database.IncidentSSHBruteForce, database.IncidentFailedThenSuccess:
 		return "inferred from auth.log lines only; attribution is the logged source address"
@@ -148,7 +148,7 @@ func prepareEvidence(itype database.IncidentType, meta map[string]any) string {
 		"rule_revision": RuleRevision,
 		"evidence_kind": evidenceKind(itype),
 	}
-	if lim := limitationFor(itype); lim != "" {
+	if lim := LimitationFor(itype); lim != "" {
 		prov["limitations"] = lim
 	}
 	clean["provenance"] = prov
