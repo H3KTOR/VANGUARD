@@ -18,7 +18,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func authFailLine(ip, user string, ts time.Time, port int) string {
-	return ts.Format("Jan _2 15:04:05") + " host sshd[100]: Failed password for " + user + " from " + ip + " port " + itoa(port) + " ssh2"
+	return ts.In(time.Local).Format("Jan _2 15:04:05") + " host sshd[100]: Failed password for " + user + " from " + ip + " port " + itoa(port) + " ssh2"
 }
 
 func TestPasswordSpraying_ManyAccountsFewAttemptsEach_CreatesIncident(t *testing.T) {
@@ -189,7 +189,7 @@ func TestPasswordSpraying_DedupeSuppressesRepeatIncidents(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func authSuccessLine(ip, user string, ts time.Time, port int) string {
-	return ts.Format("Jan _2 15:04:05") + " host sshd[100]: Accepted password for " + user + " from " + ip + " port " + itoa(port) + " ssh2"
+	return ts.In(time.Local).Format("Jan _2 15:04:05") + " host sshd[100]: Accepted password for " + user + " from " + ip + " port " + itoa(port) + " ssh2"
 }
 
 func TestCredentialStuffing_ManyAccountsHighVolumeHighFailureRatio_CreatesIncident(t *testing.T) {

@@ -2,6 +2,7 @@ package honeypot
 
 import (
 	"context"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -29,6 +30,16 @@ func TestDecoyListenerReportsConnection(t *testing.T) {
 		t.Fatalf("failed to connect to decoy listener: %v", err)
 	}
 	_, _ = conn.Write([]byte("hello decoy\n"))
+	// Half-close and drain the banner before closing: an immediate full
+	// Close() with the server's banner still unread makes some TCP stacks
+	// (observed on Windows) answer with RST and discard the data the
+	// server has not read yet. That is a property of this test client, not
+	// of the honeypot.
+	if tc, ok := conn.(*net.TCPConn); ok {
+		_ = tc.CloseWrite()
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _ = io.Copy(io.Discard, conn)
 	conn.Close()
 
 	select {

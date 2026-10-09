@@ -84,6 +84,7 @@ func TestBinaryIntegrityWatcher_DetectsDeletedBinary(t *testing.T) {
 }
 
 func TestBinaryIntegrityWatcher_DetectsPermChange(t *testing.T) {
+	skipIfNoUnixPerms(t) // needs Unix mode bits / ownership; run on Linux
 	db := testDB(t)
 	rep := &fakeReporter{}
 	dir := t.TempDir()

@@ -54,6 +54,7 @@ func TestSUIDMonitor_FirstScanIsSilent(t *testing.T) {
 }
 
 func TestSUIDMonitor_DetectsNewSetuidBinary(t *testing.T) {
+	skipIfNoUnixPerms(t) // needs Unix mode bits / ownership; run on Linux
 	db := testDB(t)
 	rep := &fakeReporter{}
 	// Deliberately NOT t.TempDir(): on Linux, os.TempDir() defaults to
@@ -113,6 +114,7 @@ func TestSUIDMonitor_CriticalEscalationInWritableDir(t *testing.T) {
 }
 
 func TestSUIDMonitor_DetectsDeletedSetuidBinary(t *testing.T) {
+	skipIfNoUnixPerms(t) // needs Unix mode bits / ownership; run on Linux
 	db := testDB(t)
 	rep := &fakeReporter{}
 	dir := t.TempDir()

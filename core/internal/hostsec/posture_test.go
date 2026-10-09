@@ -9,6 +9,7 @@ import (
 )
 
 func TestPostureDetector_SafeModeNoFinding(t *testing.T) {
+	skipIfNoUnixPerms(t) // needs Unix mode bits / ownership; run on Linux
 	db := testDB(t)
 	rep := &fakeReporter{}
 	dir := t.TempDir()
@@ -67,6 +68,7 @@ func TestPostureDetector_UnsafeModeDetected(t *testing.T) {
 }
 
 func TestPostureDetector_UnsafeThenFixedThenUnsafeAgainReports(t *testing.T) {
+	skipIfNoUnixPerms(t) // needs Unix mode bits / ownership; run on Linux
 	db := testDB(t)
 	rep := &fakeReporter{}
 	dir := t.TempDir()
@@ -136,6 +138,7 @@ func TestPostureDetector_ExpectedOwnerMatch(t *testing.T) {
 }
 
 func TestPostureDetector_UnexpectedOwnerDetected(t *testing.T) {
+	skipIfNoUnixPerms(t) // needs Unix mode bits / ownership; run on Linux
 	db := testDB(t)
 	rep := &fakeReporter{}
 	dir := t.TempDir()
@@ -207,6 +210,7 @@ func TestPostureDetector_DisabledCheckNeverFires(t *testing.T) {
 }
 
 func TestPostureDetector_InvalidOwnerSpecSkipsFailSafe(t *testing.T) {
+	skipIfNoUnixPerms(t) // needs Unix mode bits / ownership; run on Linux
 	db := testDB(t)
 	rep := &fakeReporter{}
 	dir := t.TempDir()

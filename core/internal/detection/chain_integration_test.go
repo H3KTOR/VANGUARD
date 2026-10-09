@@ -72,7 +72,7 @@ func formatWebLine(ip string, ts time.Time, path string, status int, ua string) 
 // Uses the syslog "Mon _2 15:04:05" format the real parser expects, and a
 // distinct source port per call so ordering is unambiguous in test output.
 func formatAuthFailedLine(ip string, ts time.Time, i int) string {
-	return ts.Format("Jan _2 15:04:05") + " host sshd[100]: Failed password for root from " + ip + " port 400" + itoa(50+i) + " ssh2"
+	return ts.In(time.Local).Format("Jan _2 15:04:05") + " host sshd[100]: Failed password for root from " + ip + " port 400" + itoa(50+i) + " ssh2"
 }
 
 func itoa(n int) string {
