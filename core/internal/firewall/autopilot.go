@@ -3,7 +3,9 @@ package firewall
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"log"
+	"sync"
 	"time"
 
 	"vanguard/core/internal/database"
@@ -39,6 +41,21 @@ type Autopilot struct {
 	cfg      Config
 	panicCtl panicController // Panic Mode / lockdown state, see panic_mode.go
 	alert    AlertNotifier   // optional; nil disables push alerts entirely
+
+	// ipStripes serializes the check-then-act sequence (policy decision,
+	// OS block, rule persistence, verification) per source address. Striped
+	// by hash so memory stays bounded no matter how many distinct
+	// addresses an attacker uses; two addresses sharing a stripe merely
+	// take turns.
+	ipStripes [64]sync.Mutex
+}
+
+func (a *Autopilot) lockIP(ip string) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(ip))
+	m := &a.ipStripes[h.Sum32()%uint32(len(a.ipStripes))]
+	m.Lock()
+	return m.Unlock
 }
 
 // Config controls Autopilot behavior.
@@ -176,6 +193,11 @@ func (a *Autopilot) HandleIncident(ctx context.Context, inc *database.Incident) 
 	if inc.ID != 0 {
 		idp = &inc.ID
 	}
+	// Decide and act under the per-address lock: without it, N incidents
+	// for one actor racing through "already banned?" would each ban it.
+	unlock := a.lockIP(inc.SourceIP)
+	defer unlock()
+
 	d, err := a.Plan(inc)
 	if err != nil {
 		a.recordEvent(idp, database.EventResponse, "failed", "policy evaluation failed: "+truncateDetail(err.Error()))
@@ -201,7 +223,7 @@ func (a *Autopilot) HandleIncident(ctx context.Context, inc *database.Incident) 
 		return nil
 	}
 
-	return a.Ban(ctx, inc.SourceIP, fmt.Sprintf("Autopilot: %s (incident #%d, risk %d)", inc.Type, inc.ID, inc.RiskScore),
+	return a.banLocked(ctx, inc.SourceIP, fmt.Sprintf("Autopilot: %s (incident #%d, risk %d)", inc.Type, inc.ID, inc.RiskScore),
 		time.Duration(d.DurationSeconds)*time.Second, idp, database.FirewallSourceAutopilot)
 }
 
@@ -217,6 +239,13 @@ func (a *Autopilot) HandleIncident(ctx context.Context, inc *database.Incident) 
 // inconclusive verification keeps the block (removing protection on
 // uncertainty would be worse) but is recorded as inconclusive.
 func (a *Autopilot) Ban(ctx context.Context, ip, reason string, duration time.Duration, incidentID *uint, source database.FirewallSource) error {
+	unlock := a.lockIP(ip)
+	defer unlock()
+	return a.banLocked(ctx, ip, reason, duration, incidentID, source)
+}
+
+// banLocked is Ban's body; the caller must hold the per-address lock.
+func (a *Autopilot) banLocked(ctx context.Context, ip, reason string, duration time.Duration, incidentID *uint, source database.FirewallSource) error {
 	whitelisted, err := a.db.IsWhitelisted(ip)
 	if err != nil {
 		a.recordEvent(incidentID, database.EventResponse, "failed", "whitelist check failed: "+truncateDetail(err.Error()))
