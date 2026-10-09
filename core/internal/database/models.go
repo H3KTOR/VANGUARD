@@ -514,7 +514,7 @@ type FirewallRule struct {
 	IsWhitelisted bool           `gorm:"not null;default:false;index" json:"is_whitelisted"`
 	IsActive      bool           `gorm:"not null;default:true;index:idx_firewall_ip_active,priority:2" json:"is_active"`
 
-	IncidentID *uint `json:"incident_id,omitempty"`
+	IncidentID *uint `gorm:"index" json:"incident_id,omitempty"`
 
 	BannedAt time.Time  `gorm:"not null;index" json:"banned_at"`
 	UnbanAt  *time.Time `gorm:"index" json:"unban_at,omitempty"`
@@ -667,6 +667,7 @@ func AllModels() []any {
 		&IOC{},
 		&IOCImport{},
 		&IOCMatch{},
+		&IncidentNote{},
 	}
 }
 

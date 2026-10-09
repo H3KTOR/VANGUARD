@@ -11,9 +11,9 @@ package detection
 
 import (
 	"encoding/json"
-	"strings"
 
 	"vanguard/core/internal/database"
+	redactpkg "vanguard/core/internal/redact"
 )
 
 const (
@@ -86,15 +86,7 @@ func evidenceKind(t database.IncidentType) string {
 	return "observed"
 }
 
-func isSensitiveKey(k string) bool {
-	lk := strings.ToLower(k)
-	for _, f := range sensitiveKeyFragments {
-		if strings.Contains(lk, f) {
-			return true
-		}
-	}
-	return false
-}
+func isSensitiveKey(k string) bool { return redactpkg.IsSensitiveKey(k) }
 
 // redact returns a deep-copied value with secret-keyed entries replaced
 // and long strings truncated. Depth-limited so hostile nesting cannot
