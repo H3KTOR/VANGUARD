@@ -218,6 +218,15 @@ Runbook, data audit and limits: [docs/PHASE11.md](docs/PHASE11.md). Status: **Im
 - `vanguard backup restore` is **offline and explicit**: without `-confirm` it only validates and prints a plan; with it, a backup that fails checksum, integrity, row-count or **schema-compatibility** checks can never replace the live database, a database that is open anywhere (even idle) blocks the restore, the previous database is kept as `*.pre-restore-*`, activation failures roll back, and the restore is audited inside the restored database. A real pre-Phase-5 database (from commit `1208a94`) restores, migrates and keeps its data.
 - Admin-only API/dashboard (Settings → Backups) can create and verify; it cannot download or restore. Checksums detect corruption, **not tampering**; backups are unsigned and unencrypted. There is no downgrade path; a database from a newer build is flagged at startup and refused for restore.
 
+## Phase 12 — Bounded Event Processing & Data Lifecycle
+
+Audit, measurements and limits: [docs/PHASE12.md](docs/PHASE12.md). Status: **Implemented — Verification Pending** (Windows only).
+
+- **Ingest queues**: each log source has a bounded, ordered queue and one worker (`-ingest-queue`, default 1024). A full queue applies backpressure to the tailer instead of dropping lines; oversize lines, handler panics and lines abandoned at shutdown are counted and make `GET /api/health/runtime` degraded. Detectors were not parallelized.
+- **Lost incidents are no longer silent**: a failed incident insert is retried (bounded), counted, and turns `detection_engine` health to failed; response is never triggered for an unstored incident.
+- **Query containment**: a measured fact — this SQLite driver does not interrupt a running statement on context cancel — so expensive API reads run under a concurrency guard (`-query-limit`, `-query-timeout`) that returns 503 + `Retry-After` to the caller while the statement finishes in the background.
+- **Retention** (`vanguard retention show|set|run|history`): off by default (0 days = keep everything). When enabled it deletes only old resolved/false-positive/auto-blocked incidents with no active ban (and, by default, no live analyst note) in bounded, atomic, idempotent batches; dry run first; every action is audited; open/investigating incidents, audit/tuning/backup history and IOC matches are never deleted. No HTTP route can change or run it (`GET /api/retention` is read-only, admin-only).
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.

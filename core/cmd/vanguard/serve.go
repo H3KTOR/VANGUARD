@@ -32,6 +32,8 @@ import (
 	"vanguard/core/internal/intel"
 	"vanguard/core/internal/metrics"
 	"vanguard/core/internal/notify"
+	"vanguard/core/internal/pipeline"
+	"vanguard/core/internal/retention"
 	"vanguard/core/internal/rules"
 	"vanguard/core/internal/simulator"
 	"vanguard/core/internal/tuning"
@@ -74,6 +76,8 @@ type app struct {
 	echoSrv    *api.Server
 	echoHandle *echo.Echo // set once startHTTPServer runs; used by shutdown()
 	health     *health.Registry
+	queues     []*pipeline.Queue // index 0 is auth when enabled, then web sources in order
+	retention  *retention.Runner
 
 	shutdownOnce sync.Once
 
@@ -206,6 +210,24 @@ func buildApp(cfg serveConfig) (*app, error) {
 	}
 	reg := newRuntimeRegistry(cfg)
 	echoSrv.Runtime = api.RuntimeSources{Registry: reg, MetricsInterval: cfg.MetricsInterval}
+
+	// Phase 12: one bounded, ordered ingest queue per log source, and a
+	// guard that contains slow or numerous expensive API reads.
+	var queues []*pipeline.Queue
+	if cfg.AuthLogPath != "" {
+		queues = append(queues, pipeline.New(pipeline.Config{Name: "auth", Size: cfg.IngestQueueSize}, engine.IngestAuthLogLine))
+	}
+	for i := range cfg.WebLogPaths {
+		queues = append(queues, pipeline.New(pipeline.Config{Name: fmt.Sprintf("web%d", i+1), Size: cfg.IngestQueueSize}, engine.IngestWebLogLine))
+	}
+	echoSrv.QueueStats = func() []pipeline.Stats {
+		out := make([]pipeline.Stats, 0, len(queues))
+		for _, q := range queues {
+			out = append(out, q.Stats())
+		}
+		return out
+	}
+	echoSrv.Guard = database.NewQueryGuard(cfg.QueryLimit, 250*time.Millisecond, cfg.QueryTimeout)
 	if honeypotSrv != nil {
 		echoSrv.Runtime.HoneypotStats = honeypotSrv.Stats
 	}
@@ -222,6 +244,8 @@ func buildApp(cfg serveConfig) (*app, error) {
 		intelM:    iocMatcher,
 		echoSrv:   echoSrv,
 		health:    reg,
+		queues:    queues,
+		retention: retention.New(db),
 	}, nil
 }
 
@@ -263,9 +287,15 @@ func (a *app) startBackgroundTasks(ctx context.Context) {
 	// file is non-fatal (TailFile logs a warning and returns), so one
 	// absent source never blocks VANGUARD from protecting the rest of the
 	// host. ---
+	// Each tailer submits into its own bounded queue; one worker per queue
+	// applies lines in arrival order (see internal/pipeline).
+	qi := 0
 	if a.cfg.AuthLogPath != "" {
+		q := a.queues[qi]
+		qi++
+		a.goTracked(func() { q.Run(ctx) })
 		a.goTracked(func() {
-			if err := detection.TailFileObserved(ctx, a.cfg.AuthLogPath, a.engine.IngestAuthLogLine, newTailHealth(a.health, "log:auth")); err != nil {
+			if err := detection.TailFileObserved(ctx, a.cfg.AuthLogPath, func(l string) { q.Submit(l) }, newTailHealth(a.health, "log:auth")); err != nil {
 				log.Printf("[serve] auth log tailer exited with error: %v", err)
 			}
 		})
@@ -276,8 +306,11 @@ func (a *app) startBackgroundTasks(ctx context.Context) {
 	for i, path := range a.cfg.WebLogPaths {
 		p := path // capture for the closure
 		hname := fmt.Sprintf("log:web%d", i+1)
+		q := a.queues[qi]
+		qi++
+		a.goTracked(func() { q.Run(ctx) })
 		a.goTracked(func() {
-			if err := detection.TailFileObserved(ctx, p, a.engine.IngestWebLogLine, newTailHealth(a.health, hname)); err != nil {
+			if err := detection.TailFileObserved(ctx, p, func(l string) { q.Submit(l) }, newTailHealth(a.health, hname)); err != nil {
 				log.Printf("[serve] web log tailer for %s exited with error: %v", p, err)
 			}
 		})
@@ -324,6 +357,10 @@ func (a *app) startBackgroundTasks(ctx context.Context) {
 			a.intelM.Run(ctx, 5*time.Minute)
 		})
 	}
+
+	// --- Data-lifecycle job (Phase 12). Does nothing unless the operator set
+	// a retention policy with `vanguard retention set -confirm`. ---
+	a.goTracked(func() { a.runRetentionLoop(ctx) })
 
 	// --- Autopilot maintenance loop: periodically reaps expired TTL bans
 	// (lifting them at the OS level + marking inactive in the DB) and

@@ -14,6 +14,7 @@ func newRuntimeRegistry(cfg serveConfig) *health.Registry {
 	reg := health.New()
 	// Maintenance runs every ReapInterval; silence beyond 3x is "unknown".
 	reg.Register("maintenance", cfg.ReapInterval)
+	reg.Register(retentionComponent, 2*retentionInterval)
 	reg.Register("log:auth", 0)
 	if cfg.AuthLogPath == "" {
 		reg.Disable("log:auth", "auth log tailing disabled by configuration")

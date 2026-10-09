@@ -17,6 +17,7 @@ import (
 	"vanguard/core/internal/firewall"
 	"vanguard/core/internal/hostsec"
 	"vanguard/core/internal/intel"
+	"vanguard/core/internal/pipeline"
 	"vanguard/core/internal/rules"
 	"vanguard/core/internal/simulator"
 	"vanguard/core/internal/tuning"
@@ -50,6 +51,13 @@ type Server struct {
 	// BackupDir is where API-created backups are written (empty = backups
 	// are not configured for the API).
 	BackupDir string
+
+	// Guard bounds concurrent expensive reads and releases the caller after a
+	// deadline (Phase 12). Nil = unguarded.
+	Guard *database.QueryGuard
+
+	// QueueStats lists the log-ingestion queues for runtime health (optional).
+	QueueStats func() []pipeline.Stats
 }
 
 // DetectorStatusSource is implemented by *hostsec.Manager.
@@ -96,6 +104,7 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.GET("/backup", s.handleListBackups)
 	protected.POST("/backup", s.handleCreateBackup)
 	protected.GET("/backup/:name/verify", s.handleVerifyBackup)
+	protected.GET("/retention", s.handleRetention)
 	protected.GET("/rules", s.handleListRules)
 	protected.GET("/rules/tuning", s.handleGetTuning)
 	protected.POST("/rules/tuning/preview", s.handlePreviewTuning)

@@ -55,9 +55,16 @@ type Engine struct {
 	authP     *AuthLogParser
 	webP      *WebLogParser
 	dedupe    *dedupeWindow
-	ioc       IOCMatcher        // Phase 6: nil when no intelligence is configured
-	iocDedupe *dedupeWindow     // Phase 6: long cooldown per (indicator, actor, field)
-	tuning    TuningSource      // Phase 10: effective tunable thresholds
+	ioc       IOCMatcher    // Phase 6: nil when no intelligence is configured
+	iocDedupe *dedupeWindow // Phase 6: long cooldown per (indicator, actor, field)
+	tuning    TuningSource  // Phase 10: effective tunable thresholds
+
+	pmu            sync.Mutex // guards the persistence counters below
+	persistOK      uint64
+	persistFail    uint64
+	persistLastAt  time.Time
+	persistLastErr string
+
 	chain     *ChainTracker     // Task 3: cross-signal attack-chain correlation state
 	scanner   *ScannerTracker   // Task 3: web-scanner-behavior heuristic state
 	hostCor   *HostCorrelator   // Mega Expansion Phase 2, Feature 7: process/file/network correlation state
@@ -683,8 +690,10 @@ func (e *Engine) createIncident(itype database.IncidentType, ev *Event, attemptC
 	// at the single choke point, so no detector can bypass them.
 	inc.Metadata = prepareEvidence(itype, meta)
 
-	if err := e.db.CreateIncident(inc); err != nil {
-		log.Printf("[detection] failed to persist %s incident on %s: %v", itype, ev.SourceIP, err)
+	if err := e.persist(inc); err != nil {
+		// The incident is lost: it is neither stored nor sent to response.
+		// Count it so runtime health reports the loss instead of a clean run.
+		log.Printf("[detection] failed to persist %s incident on %s after %d attempts: %v", itype, ev.SourceIP, persistAttempts, err)
 		return nil
 	}
 	e.recordEnrichment(enriched, ev, inc)

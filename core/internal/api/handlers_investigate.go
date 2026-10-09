@@ -43,9 +43,9 @@ func (s *Server) handleIncidentTimeline(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	tl, err := investigate.BuildTimeline(s.DB, inc, offset, limit)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to build timeline")
+	var tl any
+	if err := s.guarded(c, func() (e error) { tl, e = investigate.BuildTimeline(s.DB, inc, offset, limit); return }); err != nil {
+		return guardFailure(c, err, "failed to build timeline")
 	}
 	return c.JSON(http.StatusOK, tl)
 }
@@ -56,9 +56,9 @@ func (s *Server) handleIncidentGraph(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	g, err := investigate.BuildGraph(s.DB, inc)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to build relationships")
+	var g any
+	if err := s.guarded(c, func() (e error) { g, e = investigate.BuildGraph(s.DB, inc); return }); err != nil {
+		return guardFailure(c, err, "failed to build relationships")
 	}
 	return c.JSON(http.StatusOK, g)
 }
@@ -69,9 +69,9 @@ func (s *Server) handleIncidentExport(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	b, _, err := investigate.BuildExport(s.DB, inc, time.Now().UTC())
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to build export")
+	var b []byte
+	if err := s.guarded(c, func() (e error) { b, _, e = investigate.BuildExport(s.DB, inc, time.Now().UTC()); return }); err != nil {
+		return guardFailure(c, err, "failed to build export")
 	}
 	c.Response().Header().Set("Content-Disposition", `attachment; filename="vanguard-incident-`+strconv.FormatUint(uint64(inc.ID), 10)+`.json"`)
 	return c.Blob(http.StatusOK, "application/json", b)
@@ -292,9 +292,9 @@ func (s *Server) handleInvestigateIncidents(c echo.Context) error {
 	if f.Offset, err = atoiBounded(c, "offset", 0, 0, investigate.MaxQueryOffset); err != nil {
 		return err
 	}
-	res, err := investigate.Query(s.DB, f, time.Now().UTC())
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "investigation query failed")
+	var res any
+	if err := s.guarded(c, func() (e error) { res, e = investigate.Query(s.DB, f, time.Now().UTC()); return }); err != nil {
+		return guardFailure(c, err, "investigation query failed")
 	}
 	return c.JSON(http.StatusOK, res)
 }

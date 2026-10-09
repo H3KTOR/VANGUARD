@@ -47,6 +47,11 @@ type serveConfig struct {
 
 	ShutdownTimeout time.Duration
 
+	// Phase 12: bounded processing and query containment.
+	IngestQueueSize int           // lines buffered per log source before backpressure
+	QueryLimit      int           // concurrent expensive API reads
+	QueryTimeout    time.Duration // caller deadline for an expensive API read
+
 	// --- Host Security (Mega Expansion, Phase 1): FIM, Persistence,
 	// Account, Privilege Escalation, SUID/SGID scanners. See
 	// internal/hostsec/manager.go. ---
@@ -110,6 +115,10 @@ func parseServeFlags(args []string) serveConfig {
 
 	shutdownTimeout := fs.Duration("shutdown-timeout", 15*time.Second, "Maximum time to let in-flight HTTP requests finish during graceful shutdown")
 
+	ingestQueue := fs.Int("ingest-queue", 1024, "Lines buffered per log source between the tailer and detection (1-65536). When full, the tailer waits (backpressure); no line is dropped for being late")
+	queryLimit := fs.Int("query-limit", 4, "Maximum concurrent expensive API reads (investigation, hunt, export, lists); excess requests get 503")
+	queryTimeout := fs.Duration("query-timeout", 15*time.Second, "How long an expensive API read may take before the caller gets 503 (the SQLite statement itself cannot be interrupted)")
+
 	enableHostSecurity := fs.Bool("hostsec", true, "Enable Host Security scanners (FIM, Persistence, Account, Privilege Escalation, SUID/SGID monitoring)")
 	fimPaths := fs.String("fim-paths", envOr("VANGUARD_FIM_PATHS", ""), "Comma-separated list of additional sensitive files/directories for File Integrity Monitoring (appended to the built-in defaults)")
 	suidRoots := fs.String("suid-roots", envOr("VANGUARD_SUID_ROOTS", ""), "Comma-separated list of additional directories to scan for SUID/SGID binaries (appended to the built-in defaults)")
@@ -133,6 +142,19 @@ func parseServeFlags(args []string) serveConfig {
 
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
+	}
+
+	if *ingestQueue < 1 || *ingestQueue > 65536 {
+		fmt.Fprintln(os.Stderr, "vanguard serve: -ingest-queue must be between 1 and 65536")
+		os.Exit(2)
+	}
+	if *queryLimit < 1 || *queryLimit > 32 {
+		fmt.Fprintln(os.Stderr, "vanguard serve: -query-limit must be between 1 and 32")
+		os.Exit(2)
+	}
+	if *queryTimeout < time.Second || *queryTimeout > 5*time.Minute {
+		fmt.Fprintln(os.Stderr, "vanguard serve: -query-timeout must be between 1s and 5m")
+		os.Exit(2)
 	}
 
 	// Telegram alert credentials are intentionally env-var only (no CLI
@@ -160,6 +182,9 @@ func parseServeFlags(args []string) serveConfig {
 		StateMaxIdle:     *stateMaxIdle,
 		ReapInterval:     *reapInterval,
 		ShutdownTimeout:  *shutdownTimeout,
+		IngestQueueSize:  *ingestQueue,
+		QueryLimit:       *queryLimit,
+		QueryTimeout:     *queryTimeout,
 		TelegramBotToken: telegramBotToken,
 		TelegramChatID:   telegramChatID,
 

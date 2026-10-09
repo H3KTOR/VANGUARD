@@ -36,9 +36,9 @@ func (s *Server) handleListIncidents(c echo.Context) error {
 		}
 	}
 
-	incidents, err := s.DB.ListIncidents(f)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to list incidents")
+	var incidents []database.Incident
+	if err := s.guarded(c, func() (e error) { incidents, e = s.DB.ListIncidents(f); return }); err != nil {
+		return guardFailure(c, err, "failed to list incidents")
 	}
 	return c.JSON(http.StatusOK, echo.Map{"incidents": incidents, "count": len(incidents)})
 }

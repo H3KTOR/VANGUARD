@@ -150,8 +150,15 @@ func (s *Server) runtimeComponents(ctx context.Context, now time.Time) []health.
 	}
 
 	if s.Engine != nil {
-		out = append(out, health.Component{Name: "detection_engine", State: health.Healthy,
-			Counters: map[string]uint64{"dedupe_keys": uint64(s.Engine.DedupeLen())}})
+		out = append(out, engineComponent(s.Engine.Stats(), s.Engine.DedupeLen(), now))
+	}
+	if s.QueueStats != nil {
+		for _, q := range s.QueueStats() {
+			out = append(out, queueComponent(q, now))
+		}
+	}
+	if s.Guard != nil {
+		out = append(out, guardComponent(s.Guard.Stats()))
 	}
 
 	if lm, err := s.DB.LatestMetric(); err != nil || lm == nil {

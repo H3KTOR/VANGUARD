@@ -42,6 +42,8 @@ func main() {
 		runIntelCmd(os.Args[2:])
 	case "backup":
 		runBackupCmd(os.Args[2:])
+	case "retention":
+		runRetentionCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -59,6 +61,7 @@ Usage:
   vanguard simulate <scenario> [flags]   Run a safe, synthetic attack simulation
   vanguard intel import|list [flags]     Manage local threat-intelligence indicators (offline)
   vanguard backup create|list|verify|restore   Consistent local backups; restore is offline-only
+  vanguard retention show|set|run|history   Operational-data retention policy; deletion needs -confirm
   vanguard help                          Show this message
 
 Serve flags:

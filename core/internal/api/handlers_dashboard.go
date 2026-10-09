@@ -15,17 +15,21 @@ import (
 func (s *Server) handleDashboardSummary(c echo.Context) error {
 	since24h := time.Now().UTC().Add(-24 * time.Hour)
 
-	openIncidents, err := s.DB.ListIncidents(database.IncidentFilter{Status: database.StatusOpen, Limit: 500})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to load incidents")
-	}
-	recentIncidents, err := s.DB.ListIncidents(database.IncidentFilter{Since: since24h, Limit: 500})
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to load incidents")
-	}
-	activeBans, err := s.DB.ListFirewallRules(true)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "failed to load firewall rules")
+	var (
+		openIncidents, recentIncidents []database.Incident
+		activeBans                     []database.FirewallRule
+	)
+	if err := s.guarded(c, func() (e error) {
+		if openIncidents, e = s.DB.ListIncidents(database.IncidentFilter{Status: database.StatusOpen, Limit: 500}); e != nil {
+			return e
+		}
+		if recentIncidents, e = s.DB.ListIncidents(database.IncidentFilter{Since: since24h, Limit: 500}); e != nil {
+			return e
+		}
+		activeBans, e = s.DB.ListFirewallRules(true)
+		return e
+	}); err != nil {
+		return guardFailure(c, err, "failed to load dashboard data")
 	}
 
 	bySeverity := map[database.Severity]int{}

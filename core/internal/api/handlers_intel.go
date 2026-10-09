@@ -292,9 +292,9 @@ func (s *Server) handleHuntMatches(c echo.Context) error {
 	if f.Offset, err = atoiBounded(c, "offset", 0, 0, 10000); err != nil {
 		return err
 	}
-	rows, err := s.DB.HuntMatches(f)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "hunt query failed")
+	var rows []database.HuntRow
+	if err := s.guarded(c, func() (e error) { rows, e = s.DB.HuntMatches(f); return }); err != nil {
+		return guardFailure(c, err, "hunt query failed")
 	}
 	if rows == nil {
 		rows = []database.HuntRow{}

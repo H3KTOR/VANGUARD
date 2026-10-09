@@ -670,6 +670,8 @@ func AllModels() []any {
 		&IncidentNote{},
 		&RuleTuningRevision{},
 		&BackupAudit{},
+		&RetentionPolicy{},
+		&RetentionRun{},
 	}
 }
 
