@@ -64,7 +64,7 @@ func (l *failureLimiter) blocked(key string) (bool, time.Duration) {
 }
 
 // fail records one failure.
-func (l *failureLimiter) fail(key string) {
+func (l *failureLimiter) fail(key string) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
@@ -80,6 +80,7 @@ func (l *failureLimiter) fail(key string) {
 		l.entries[key] = e
 	}
 	e.count++
+	return e.count
 }
 
 // reset forgets key (after a successful login).

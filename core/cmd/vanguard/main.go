@@ -44,6 +44,8 @@ func main() {
 		runBackupCmd(os.Args[2:])
 	case "retention":
 		runRetentionCmd(os.Args[2:])
+	case "audit":
+		runAuditCmd(os.Args[2:])
 	case "version", "-version", "--version":
 		runVersionCmd(os.Args[2:])
 	case "doctor":
@@ -66,6 +68,7 @@ Usage:
   vanguard intel import|list [flags]     Manage local threat-intelligence indicators (offline)
   vanguard backup create|list|verify|restore   Consistent local backups; restore is offline-only
   vanguard retention show|set|run|history   Operational-data retention policy; deletion needs -confirm
+  vanguard audit seal|verify|keygen|checkpoint   Audit-ledger integrity (verify is read-only)
   vanguard doctor [flags]                Read-only host/install/upgrade diagnostics (never changes anything)
   vanguard version [-json]               Build information
   vanguard help                          Show this message

@@ -135,6 +135,7 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.GET("/backup/:name/verify", s.handleVerifyBackup)
 	protected.GET("/retention", s.handleRetention)
 	protected.GET("/audit/admin", s.handleAdminAudit)
+	protected.GET("/audit/integrity", s.handleAuditIntegrity)
 	protected.GET("/rules", s.handleListRules)
 	protected.GET("/rules/tuning", s.handleGetTuning)
 	protected.POST("/rules/tuning/preview", s.handlePreviewTuning)

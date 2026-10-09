@@ -104,7 +104,11 @@ func (s *Server) throttled(c echo.Context) error {
 
 func (s *Server) authFailed(c echo.Context) {
 	s.sec.loginFailed.Add(1)
-	s.loginLimiter.fail(c.RealIP())
+	if s.loginLimiter.fail(c.RealIP()) == loginMaxFailures {
+		// One row when an address becomes locked out (not one per failure: an
+		// attacker must not be able to grow the audit table at will).
+		s.audit(c, "auth.lockout", c.RealIP(), auditRefused, "repeated failed sign-ins; further attempts are throttled")
+	}
 }
 
 // handleLogin verifies email+password against the stored bcrypt hash and,
@@ -154,6 +158,7 @@ func (s *Server) handleLogin(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to issue token")
 	}
 	s.loginLimiter.reset(c.RealIP())
+	_ = s.DB.RecordAdminAudit(&database.AdminAudit{Actor: user.Email, ActorRole: string(user.Role), Action: "auth.login", Target: "user:" + strconv.FormatUint(uint64(user.ID), 10), Result: auditOK})
 	if err := s.DB.TouchLastLogin(user.ID); err != nil {
 		c.Logger().Warnf("failed to touch last_login_at for user #%d: %v", user.ID, err)
 	}

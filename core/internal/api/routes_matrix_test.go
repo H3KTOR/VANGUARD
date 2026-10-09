@@ -55,6 +55,7 @@ var routeTable = map[string]struct {
 	"GET /api/backup/:name/verify":         {adminOnly, false},
 	"GET /api/retention":                   {adminOnly, false},
 	"GET /api/audit/admin":                 {adminOnly, false},
+	"GET /api/audit/integrity":             {adminOnly, false},
 	"GET /api/rules":                       {anyUser, false},
 	"GET /api/rules/tuning":                {anyUser, false},
 	"POST /api/rules/tuning/preview":       {anyUser, false}, // never mutates

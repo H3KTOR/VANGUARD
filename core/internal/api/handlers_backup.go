@@ -110,5 +110,10 @@ func (s *Server) handleVerifyBackup(c echo.Context) error {
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "verification failed")
 	}
+	res := auditOK
+	if !rep.Valid {
+		res = auditFailed // the verification RAN and reported the backup as not valid
+	}
+	s.audit(c, "backup.verify", c.Param("name"), res, "")
 	return c.JSON(http.StatusOK, rep)
 }

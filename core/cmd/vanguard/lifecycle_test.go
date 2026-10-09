@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -207,5 +208,43 @@ func TestQueueToEngineToDatabase(t *testing.T) {
 	}
 	if st := a.engine.Stats(); st.Created != 1 || st.Failed != 0 {
 		t.Fatalf("engine stats: %+v", st)
+	}
+}
+
+// The audit loop seals, verifies and reports through runtime health: a clean
+// ledger is healthy, and a tampered record turns the component failed.
+func TestAuditLoopReportsIntegrityThroughHealth(t *testing.T) {
+	cfg := parseServeFlags([]string{
+		"-db", filepath.Join(t.TempDir(), "a.db"), "-auth-log", "", "-honeypot=false", "-hostsec=false", "-intel=false",
+		"-jwt-secret", "test-secret-test-secret-test-secret",
+	})
+	a, err := buildApp(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.shutdown()
+	state := func() (string, string) {
+		for _, c := range a.health.Snapshot() {
+			if c.Name == auditComponent {
+				return string(c.State), c.Detail
+			}
+		}
+		return "missing", ""
+	}
+	if s, _ := state(); s != "not_yet_observed" {
+		t.Fatalf("before any verification the component must not read as healthy, got %s", s)
+	}
+	for i := 0; i < 3; i++ {
+		_ = a.db.RecordAdminAudit(&database.AdminAudit{Actor: "a", Action: "x", Result: "ok"})
+	}
+	a.auditSealOnce()
+	a.auditVerifyOnce()
+	if s, _ := state(); s != "healthy" {
+		t.Fatalf("clean ledger: %s", s)
+	}
+	a.db.Exec("UPDATE admin_audits SET action = 'forged' WHERE id = 2")
+	a.auditVerifyOnce()
+	if s, d := state(); s != "failed" || !strings.Contains(d, "modified_record") {
+		t.Fatalf("tampering must make audit integrity FAILED (%s: %s)", s, d)
 	}
 }

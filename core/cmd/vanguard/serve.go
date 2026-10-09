@@ -369,6 +369,7 @@ func (a *app) startBackgroundTasks(ctx context.Context) {
 	// --- Data-lifecycle job (Phase 12). Does nothing unless the operator set
 	// a retention policy with `vanguard retention set -confirm`. ---
 	a.goTracked(func() { a.runRetentionLoop(ctx) })
+	a.goTracked(func() { a.runAuditLoop(ctx) })
 
 	// --- Autopilot maintenance loop: periodically reaps expired TTL bans
 	// (lifting them at the OS level + marking inactive in the DB) and
@@ -516,6 +517,7 @@ func (a *app) doShutdown() {
 		log.Println("[serve] WARNING: timed out waiting for background tasks to stop; closing database anyway")
 	}
 
+	a.auditSealOnce() // seal whatever was written since the last tick, then close
 	log.Println("[serve] closing database...")
 	if err := a.db.Close(); err != nil {
 		log.Printf("[serve] error closing database: %v", err)
