@@ -136,6 +136,7 @@ type ListeningDetector struct {
 	cfg      ListeningConfig
 
 	procRoot  string // "/proc"; overridden by tests
+	rep       scanReporter
 	startedAt time.Time
 }
 
@@ -159,6 +160,7 @@ func (d *ListeningDetector) Scan(ctx context.Context) {
 	socks, inodes, err := d.readListeners(ctx)
 	if err != nil {
 		logf("listening", "scan failure: %v (baseline preserved)", err)
+		d.rep.fail("could not read /proc/net: " + err.Error())
 		return
 	}
 
@@ -178,6 +180,7 @@ func (d *ListeningDetector) Scan(ctx context.Context) {
 	have, err := loadSnapshot(d.db, database.BaselineListeningService, listeningSnapshotKey, &prev)
 	if err != nil {
 		logf("listening", "baseline unavailable: %v (not replacing it)", err)
+		d.rep.fail("baseline store unavailable: " + err.Error())
 		return
 	}
 	save := func() {

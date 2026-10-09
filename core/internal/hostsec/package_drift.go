@@ -100,6 +100,8 @@ type PackageDetector struct {
 	ignored map[string]bool
 	watched map[string]bool
 
+	rep scanReporter
+
 	// unavailable tracks an ongoing outage so it is logged once, not
 	// on every tick.
 	unavailable atomic.Bool
@@ -128,6 +130,7 @@ func (d *PackageDetector) Scan(ctx context.Context) {
 	}
 	inv, err := readDpkgStatus(d.cfg.StatusPath)
 	if err != nil {
+		d.rep.skip("package database unavailable: " + err.Error())
 		if d.unavailable.CompareAndSwap(false, true) {
 			logf("package_drift", "package database unavailable (%v): detector idle until it is readable; baseline preserved", err)
 		}
@@ -149,6 +152,7 @@ func (d *PackageDetector) Scan(ctx context.Context) {
 	have, err := loadSnapshot(d.db, database.BaselinePackage, packageSnapshotKey, &prev)
 	if err != nil {
 		logf("package_drift", "baseline unavailable: %v (not replacing it)", err)
+		d.rep.fail("baseline store unavailable: " + err.Error())
 		return
 	}
 	save := func() {

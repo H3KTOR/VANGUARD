@@ -162,6 +162,9 @@ func buildApp(cfg serveConfig) (*app, error) {
 		Registry:  simulator.NewRegistry(),
 		StartedAt: time.Now(),
 	}
+	if cfg.EnableHostSecurity {
+		echoSrv.Detectors = hostsecMgr
+	}
 
 	return &app{
 		cfg:       cfg,

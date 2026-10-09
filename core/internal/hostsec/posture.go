@@ -154,6 +154,7 @@ type PostureDetector struct {
 	// root prefixes every checked path. Defaults to "" (the real host
 	// filesystem); unit tests set it to a tmpdir via WithRoot.
 	root string
+	rep  scanReporter
 }
 
 // NewPostureDetector constructs a Configuration Posture detector. An
@@ -211,6 +212,7 @@ func (d *PostureDetector) checkPermissions(p string) {
 			return
 		}
 		logf("posture", "failed to stat %s for permission check: %v", p, err)
+		d.rep.fail("cannot stat " + p + ": " + err.Error())
 		return
 	}
 
@@ -257,6 +259,7 @@ func (d *PostureDetector) checkOwnership(p string) {
 			return
 		}
 		logf("posture", "failed to stat %s for ownership check: %v", p, err)
+		d.rep.fail("cannot stat " + p + ": " + err.Error())
 		return
 	}
 	uid, gid, ok := ownerOf(info)
@@ -337,6 +340,7 @@ func (d *PostureDetector) reportIfChanged(key string, result PostureCheckResult)
 		}
 	} else if err != database.ErrNotFound {
 		logf("posture", "baseline lookup failed for %s: %v", key, err)
+		d.rep.fail("baseline store unavailable: " + err.Error())
 		return
 	}
 

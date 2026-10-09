@@ -15,6 +15,7 @@ import (
 	"vanguard/core/internal/database"
 	"vanguard/core/internal/detection"
 	"vanguard/core/internal/firewall"
+	"vanguard/core/internal/hostsec"
 	"vanguard/core/internal/simulator"
 )
 
@@ -27,6 +28,15 @@ type Server struct {
 	Auth      *auth.Manager
 	Registry  *simulator.Registry
 	StartedAt time.Time
+
+	// Detectors exposes per-scanner operational status (optional; nil
+	// when Host Security scanning is disabled).
+	Detectors DetectorStatusSource
+}
+
+// DetectorStatusSource is implemented by *hostsec.Manager.
+type DetectorStatusSource interface {
+	Status() []hostsec.ScanStatus
 }
 
 // NewEcho builds a fully wired Echo instance: global middleware, public
@@ -63,6 +73,7 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.GET("/incidents", s.handleListIncidents)
 	protected.GET("/incidents/:id", s.handleGetIncident)
 	protected.PUT("/incidents/:id/status", s.handleUpdateIncidentStatus)
+	protected.GET("/detectors/status", s.handleDetectorStatus)
 	protected.GET("/incidents/:id/events", s.handleListIncidentEvents)
 	protected.GET("/incidents/:id/response-plan", s.handleIncidentResponsePlan)
 	protected.POST("/incidents/:id/block", s.handleBlockIncidentIP)

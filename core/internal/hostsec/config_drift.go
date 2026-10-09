@@ -90,6 +90,7 @@ type ConfigDriftDetector struct {
 	cfg      ConfigDriftConfig
 	paths    []string
 	root     string // test-only filesystem prefix
+	rep      scanReporter
 }
 
 // NewConfigDriftDetector constructs the detector, validating cfg: paths
@@ -131,6 +132,7 @@ func (d *ConfigDriftDetector) scanOne(p string) {
 	if err != nil {
 		// Unreadable != deleted: keep the baseline, record the failure.
 		logf("config_drift", "scan failure for %s: %v (baseline preserved)", p, err)
+		d.rep.fail("cannot stat " + p + ": " + err.Error())
 		return
 	}
 
@@ -138,6 +140,7 @@ func (d *ConfigDriftDetector) scanOne(p string) {
 	have, err := loadSnapshot(d.db, database.BaselineConfigDrift, p, &prev)
 	if err != nil {
 		logf("config_drift", "baseline unavailable for %s: %v (not replacing it)", p, err)
+		d.rep.fail("baseline store unavailable: " + err.Error())
 		return
 	}
 
