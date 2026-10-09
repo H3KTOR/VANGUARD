@@ -4,7 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -151,5 +153,65 @@ func TestStatus_HealthyPhase4ScanIsClean(t *testing.T) {
 	m.runScan(context.Background(), "package_drift", m.packages.Scan)
 	if s := statusOf(m, "package_drift"); s.LastResult != ResultOK || s.LastCleanScan == nil {
 		t.Fatalf("%+v", s)
+	}
+}
+
+// A scan that ignores its context (stuck syscall) must not wedge the
+// scanner loop, must be reported as a timeout, and must never be
+// overlapped by a second run of the same scanner.
+func TestStatus_WedgedScanIsAbandonedAndNeverOverlapped(t *testing.T) {
+	m := newStatusManager(t)
+	m.scanTimeout = 20 * time.Millisecond
+	m.abandonGrace = 30 * time.Millisecond
+	release := make(chan struct{})
+	var started atomic.Int32
+	wedged := func(context.Context) { started.Add(1); <-release } // ignores ctx on purpose
+
+	t0 := time.Now()
+	m.runScan(context.Background(), "probe", wedged)
+	if time.Since(t0) > 2*time.Second {
+		t.Fatal("the loop must not wait for a wedged scan forever")
+	}
+	if s := statusOf(m, "probe"); s.LastResult != ResultTimeout || !strings.Contains(s.LastNote, "abandoned") || s.LastCleanScan != nil {
+		t.Fatalf("%+v", s)
+	}
+	// next tick while the old goroutine is still stuck: no overlap
+	m.runScan(context.Background(), "probe", wedged)
+	if started.Load() != 1 {
+		t.Fatalf("a second scan was started while the first is still in flight (%d starts)", started.Load())
+	}
+	if s := statusOf(m, "probe"); s.LastResult != ResultTimeout || !strings.Contains(s.LastNote, "still running") {
+		t.Fatalf("%+v", s)
+	}
+	// once the stuck scan finally returns, the scanner works again
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		m.inflightMu.Lock()
+		busy := m.inflight["probe"]
+		m.inflightMu.Unlock()
+		if !busy {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	m.runScan(context.Background(), "probe", func(context.Context) {})
+	if s := statusOf(m, "probe"); s.LastResult != ResultOK || s.LastCleanScan == nil {
+		t.Fatalf("scanner must recover after the stuck scan returns: %+v", s)
+	}
+}
+
+func TestManagerRunRefusesDoubleStart(t *testing.T) {
+	m := newStatusManager(t)
+	m.running.Store(true) // simulate an already-running manager
+	done := make(chan struct{})
+	go func() { m.Run(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second Run must return immediately instead of starting duplicate workers")
+	}
+	if !m.running.Load() {
+		t.Fatal("the refused Run must not clear the running flag of the live one")
 	}
 }

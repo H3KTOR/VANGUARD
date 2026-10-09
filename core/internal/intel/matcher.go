@@ -63,6 +63,8 @@ type Matcher struct {
 	lastErr  string
 	lastTry  time.Time
 	haveSnap bool
+
+	running atomic.Bool // guards against a second Run loop
 }
 
 // NewMatcher builds a matcher and performs the first load. A failed first
@@ -117,6 +119,11 @@ func (m *Matcher) Reload() error {
 
 // Run reloads periodically until ctx is cancelled.
 func (m *Matcher) Run(ctx context.Context, every time.Duration) {
+	// A second concurrent Run would only duplicate reloads; refuse it.
+	if !m.running.CompareAndSwap(false, true) {
+		return
+	}
+	defer m.running.Store(false)
 	if every <= 0 {
 		every = 5 * time.Minute
 	}

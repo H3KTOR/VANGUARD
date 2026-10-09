@@ -13,6 +13,7 @@ import FirewallPage from './components/FirewallPage.jsx'
 import HoneypotPage from './components/HoneypotPage.jsx'
 import MetricsPage from './components/MetricsPage.jsx'
 import IntelPage from './components/IntelPage.jsx'
+import RuntimeHealthBanner from './components/RuntimeHealthBanner.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
 
 function formatUptime(seconds) {
@@ -86,6 +87,8 @@ export default function App() {
             <span>PANIC MODE ACTIVE &mdash; non-essential inbound traffic is locked down.</span>
           </div>
         )}
+
+        <RuntimeHealthBanner />
 
         <main className="flex-1 overflow-y-auto">
           {page === 'command-center' && <CommandCenter />}

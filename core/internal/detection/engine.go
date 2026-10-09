@@ -127,6 +127,9 @@ func (e *Engine) State() *State { return e.state }
 // ReapDedupe drops expired incident-dedupe entries (maintenance loop).
 func (e *Engine) ReapDedupe(now time.Time) int { return e.dedupe.Reap(now) }
 
+// DedupeLen reports how many incident-dedupe keys are currently tracked.
+func (e *Engine) DedupeLen() int { return e.dedupe.Len() }
+
 // ChainTracker exposes the attack-chain correlation state, primarily so
 // cmd/vanguard's background maintenance loop can call Reap() periodically
 // (mirrors State() above) to keep memory bounded.
@@ -727,10 +730,10 @@ func newDedupeWindow(cooldown time.Duration) *dedupeWindow {
 	return &dedupeWindow{cooldown: cooldown, last: make(map[string]time.Time)}
 }
 
-// maxDedupeEntries bounds the dedupe map. Keys embed attacker-influenced
+// MaxDedupeEntries bounds the dedupe map. Keys embed attacker-influenced
 // values (source IP, finding subject), so without a cap a spray of
 // distinct sources would grow it without limit.
-const maxDedupeEntries = 20000
+const MaxDedupeEntries = 20000
 
 func (d *dedupeWindow) allow(ip string, itype database.IncidentType) bool {
 	key := fmt.Sprintf("%s|%s", ip, itype)
@@ -740,9 +743,9 @@ func (d *dedupeWindow) allow(ip string, itype database.IncidentType) bool {
 	if last, ok := d.last[key]; ok && now.Sub(last) < d.cooldown {
 		return false
 	}
-	if len(d.last) >= maxDedupeEntries {
+	if len(d.last) >= MaxDedupeEntries {
 		d.reapLocked(now)
-		if len(d.last) >= maxDedupeEntries {
+		if len(d.last) >= MaxDedupeEntries {
 			d.evictOldestLocked()
 		}
 	}

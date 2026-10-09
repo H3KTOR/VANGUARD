@@ -23,6 +23,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -91,6 +92,32 @@ type Server struct {
 	// after ctx is cancelled -- this lets the caller safely close the
 	// database only once no honeypot goroutine can still write to it.
 	wg sync.WaitGroup
+
+	// sem bounds concurrently handled connections. Without it a connection
+	// flood spawns one goroutine (and holds one file descriptor) per
+	// connection for the whole read timeout.
+	sem chan struct{}
+
+	accepted, shed, acceptErrors, bound, bindFailed atomic.Uint64
+}
+
+// MaxConcurrentConns bounds simultaneously handled decoy connections.
+const MaxConcurrentConns = 256
+
+// Stats is a point-in-time view of the honeypot's operation for health
+// reporting.
+type Stats struct {
+	Accepted     uint64 // connections handed to a handler goroutine
+	Shed         uint64 // connections over the concurrency bound (still reported as hits, but not read/bannered)
+	AcceptErrors uint64
+	BoundPorts   uint64
+	BindFailures uint64
+}
+
+// Stats returns the current counters.
+func (s *Server) Stats() Stats {
+	return Stats{Accepted: s.accepted.Load(), Shed: s.shed.Load(), AcceptErrors: s.acceptErrors.Load(),
+		BoundPorts: s.bound.Load(), BindFailures: s.bindFailed.Load()}
 }
 
 // NewServer constructs a honeypot Server. handler is called once per
@@ -101,7 +128,7 @@ func NewServer(decoys []Decoy, handler HitHandler) *Server {
 	if handler == nil {
 		handler = func(Hit) {}
 	}
-	return &Server{decoys: decoys, handler: handler, readTimeout: 3 * time.Second}
+	return &Server{decoys: decoys, handler: handler, readTimeout: 3 * time.Second, sem: make(chan struct{}, MaxConcurrentConns)}
 }
 
 // Start binds every configured decoy port and serves until ctx is
@@ -132,8 +159,10 @@ func (s *Server) serveDecoy(ctx context.Context, d Decoy) {
 	ln, err := lc.Listen(ctx, "tcp", fmt.Sprintf(":%d", d.Port))
 	if err != nil {
 		log.Printf("[honeypot] WARNING: could not bind decoy port %d (%s): %v -- this decoy is disabled", d.Port, d.Service, err)
+		s.bindFailed.Add(1)
 		return
 	}
+	s.bound.Add(1)
 	log.Printf("[honeypot] listening on :%d (%s)", d.Port, d.Service)
 
 	go func() {
@@ -141,6 +170,7 @@ func (s *Server) serveDecoy(ctx context.Context, d Decoy) {
 		_ = ln.Close()
 	}()
 
+	backoff := time.Duration(0)
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -148,12 +178,47 @@ func (s *Server) serveDecoy(ctx context.Context, d Decoy) {
 			case <-ctx.Done():
 				return
 			default:
-				log.Printf("[honeypot] accept error on decoy port %d: %v", d.Port, err)
-				continue
 			}
+			s.acceptErrors.Add(1)
+			log.Printf("[honeypot] accept error on decoy port %d: %v", d.Port, err)
+			// Back off so a persistent error (e.g. descriptor exhaustion)
+			// cannot turn this loop into a busy spin.
+			if backoff == 0 {
+				backoff = 50 * time.Millisecond
+			} else if backoff < time.Second {
+				backoff *= 2
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			continue
 		}
-		s.wg.Add(1)
-		go s.handleConn(conn, d)
+		backoff = 0
+
+		select {
+		case s.sem <- struct{}{}:
+			s.accepted.Add(1)
+			s.wg.Add(1)
+			go func() {
+				defer func() { <-s.sem }()
+				s.handleConn(conn, d)
+			}()
+		default:
+			// Saturated. Do NOT silently discard a security signal: the
+			// connection to a decoy port is still reported as a hit
+			// (source, port, service) from this goroutine, which also
+			// applies natural backpressure to the accept loop. Only the
+			// banner/first-line capture is skipped.
+			s.shed.Add(1)
+			host, _, herr := net.SplitHostPort(conn.RemoteAddr().String())
+			if herr != nil {
+				host = conn.RemoteAddr().String()
+			}
+			_ = conn.Close()
+			s.handler(Hit{SourceIP: host, Port: d.Port, Service: d.Service, Timestamp: time.Now().UTC()})
+		}
 	}
 }
 

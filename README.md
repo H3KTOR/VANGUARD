@@ -194,6 +194,14 @@ Capability-to-test matrix, environment, failure classification and Definition of
 - **CI** (`.github/workflows/ci.yml`): static, test, race, frontend, lab and report jobs — written, **not yet executed**.
 - **Still unverified**: all Docker lab suites, `go test -race`, Linux-only tests, real `ufw`, the declared Go 1.25 minimum.
 
+## Phase 9 — Runtime Reliability & Health
+
+Details, risk inventory and limits: [docs/PHASE9.md](docs/PHASE9.md). Status: **Implemented — Verification Pending** (no Linux/`-race`/Docker run).
+
+- **`GET /api/health/runtime`** (authenticated): per-component state (`healthy`, `degraded`, `failed`, `timed_out`, `disabled`, `not_yet_observed`, `unknown`) with last attempt and last success reported separately. A component that never reported is *not* healthy, and one that stopped reporting is `unknown` (missing telemetry), never a clean result. `/api/health` remains the public liveness probe.
+- **Bounds & backpressure**: honeypot connections capped (excess still reported as hits, counted as `shed`), accept-loop backoff, wedged scans abandoned after deadline + grace and never overlapped, duplicate worker starts refused, idempotent shutdown. The dashboard shows a banner only when something is not healthy.
+- **Documented, unchanged gaps**: detection runs synchronously in the tailer (natural backpressure), no per-query timeout, no incident retention policy.
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.

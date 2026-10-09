@@ -1,6 +1,7 @@
 package intel
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -207,5 +208,32 @@ func TestMatcher_RestartPersistence(t *testing.T) {
 	_ = m2.Reload()
 	if len(m2.MatchIP("203.0.113.81")) != 1 {
 		t.Fatal("indicators must survive restart")
+	}
+}
+
+func TestMatcher_RunRefusesSecondLoopAndStopsOnCancel(t *testing.T) {
+	m, _ := loadedMatcher(t, rec("ip", "203.0.113.99"))
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan struct{})
+	go func() { m.Run(ctx, time.Hour); close(first) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for !m.running.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	second := make(chan struct{})
+	go func() { m.Run(context.Background(), time.Hour); close(second) }()
+	select {
+	case <-second:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second Run must return immediately")
+	}
+	cancel()
+	select {
+	case <-first:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run must stop when its context is cancelled")
+	}
+	if m.running.Load() {
+		t.Fatal("running flag must clear after the loop exits so it can be restarted")
 	}
 }

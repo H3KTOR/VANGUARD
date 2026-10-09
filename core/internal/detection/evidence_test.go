@@ -118,10 +118,10 @@ func TestEvidence_HostFindingSecretNeverPersisted(t *testing.T) {
 
 func TestDedupe_BoundedAndReaped(t *testing.T) {
 	d := newDedupeWindow(50 * time.Millisecond)
-	for i := 0; i < maxDedupeEntries+500; i++ {
+	for i := 0; i < MaxDedupeEntries+500; i++ {
 		d.allow(fmt.Sprintf("10.0.%d.%d", i/250, i%250), database.IncidentPortScan)
 	}
-	if d.Len() > maxDedupeEntries {
+	if d.Len() > MaxDedupeEntries {
 		t.Fatalf("dedupe map exceeded bound: %d", d.Len())
 	}
 	time.Sleep(80 * time.Millisecond)

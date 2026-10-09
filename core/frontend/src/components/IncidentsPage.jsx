@@ -4,7 +4,6 @@ import { usePolling } from '../hooks/usePolling.js'
 import { listIncidents, updateIncidentStatus, blockIncidentIP } from '../api/vanguardClient.js'
 import { SEVERITY_BG } from '../utils/severity.js'
 import IncidentEvidence from './IncidentEvidence.jsx'
-import DetectorStatusPanel from './DetectorStatusPanel.jsx'
 
 const STATUS_LABEL = {
   open: 'Open',
@@ -43,7 +42,6 @@ export default function IncidentsPage() {
 
   return (
     <div className="p-6 max-w-[1600px] mx-auto space-y-4">
-      <DetectorStatusPanel />
       <div className="flex flex-wrap items-center gap-3">
         <select
           value={statusFilter}

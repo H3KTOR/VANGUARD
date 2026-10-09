@@ -123,3 +123,39 @@ export function timelineNotice(tl) {
 export function downloadName(id) {
   return `vanguard-incident-${Number(id) || 0}.json`
 }
+
+// ---------------------------------------------------------------------------
+// Phase 9: runtime health helpers
+// ---------------------------------------------------------------------------
+
+export const HEALTH_LABEL = {
+  healthy: 'Healthy',
+  degraded: 'Degraded',
+  failed: 'Failed',
+  timed_out: 'Timed out',
+  disabled: 'Disabled by configuration',
+  not_yet_observed: 'Not yet observed',
+  unknown: 'Unknown - no recent telemetry',
+}
+
+// States an operator should look at. `disabled` is a deliberate choice and
+// not an alert; healthy needs no banner.
+export const HEALTH_ATTENTION = new Set(['degraded', 'failed', 'timed_out', 'unknown', 'not_yet_observed'])
+
+export function healthAttention(rt) {
+  const comps = Array.isArray(rt && rt.components) ? rt.components : []
+  return comps.filter((c) => HEALTH_ATTENTION.has(c.state))
+}
+
+// healthHeadline never says "all clear": it returns null only when overall
+// is genuinely healthy.
+export function healthHeadline(rt) {
+  if (!rt) return null
+  if (rt.overall === 'healthy') return null
+  const n = healthAttention(rt).length
+  if (rt.overall === 'unknown' || rt.overall === 'not_yet_observed') {
+    return `${n} component(s) have not reported recently - absence of alerts is not evidence of a clean host`
+  }
+  const kind = rt.overall === 'failed' ? 'FAILED' : rt.overall === 'timed_out' ? 'TIMED OUT' : 'DEGRADED'
+  return `Runtime ${kind}: ${n} component(s) need attention`
+}

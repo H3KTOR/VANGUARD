@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"vanguard/core/internal/database"
@@ -122,6 +123,19 @@ type Manager struct {
 
 	// scanTimeout overrides thresholds.HostScanTimeout when > 0 (tests).
 	scanTimeout time.Duration
+	// abandonGrace is how long after its deadline a scan may keep running
+	// before the loop gives up waiting for it (default 5s).
+	abandonGrace time.Duration
+
+	// inflight tracks scans still executing so a wedged scan (one that
+	// ignores its context, e.g. blocked in a stuck filesystem call) can
+	// never be overlapped by another run of the same scanner: at most one
+	// abandoned goroutine per scanner is ever retained.
+	inflightMu sync.Mutex
+	inflight   map[string]bool
+
+	// running guards against Run being started twice (duplicate workers).
+	running atomic.Bool
 
 	// Phase 4 System Posture (nil when disabled).
 	posture   *PostureDetector
@@ -207,35 +221,79 @@ func (m *Manager) Status() []ScanStatus {
 	return m.board.Snapshot()
 }
 
-// runScan executes one scan tick with the shared deadline, records its
-// outcome on the status board, and converts a panic in a scanner into a
-// recorded failure instead of crashing the daemon.
+// runScan executes one scan tick with the shared deadline and records its
+// outcome on the status board. It converts a scanner panic into a recorded
+// failure, and it never waits indefinitely: if the scan does not return
+// within its deadline plus a grace period it is recorded as a timeout and
+// ABANDONED (the goroutine keeps running until it returns on its own, but
+// the scanner will not be started again while it is still in flight).
 func (m *Manager) runScan(parent context.Context, name string, scan func(context.Context)) {
 	limit := thresholds.HostScanTimeout
 	if m.scanTimeout > 0 {
 		limit = m.scanTimeout
 	}
+	grace := m.abandonGrace
+	if grace <= 0 {
+		grace = 5 * time.Second
+	}
+
+	m.inflightMu.Lock()
+	if m.inflight == nil {
+		m.inflight = map[string]bool{}
+	}
+	busy := m.inflight[name]
+	if !busy {
+		m.inflight[name] = true
+	}
+	m.inflightMu.Unlock()
+	start := time.Now()
+	if busy {
+		m.board.begin(name, start)
+		m.board.end(name, start, time.Now(), ResultTimeout, "previous scan is still running after its deadline (abandoned); not starting an overlapping run")
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(parent, limit)
 	defer cancel()
-	start := time.Now()
 	m.board.begin(name, start)
-	forced, note := "", ""
-	func() {
+
+	type outcome struct{ forced, note string }
+	done := make(chan outcome, 1)
+	go func() {
 		defer func() {
-			if r := recover(); r != nil {
-				forced, note = ResultFailed, fmt.Sprintf("scanner panic: %v", r)
-				logf(name, "recovered from panic: %v", r)
-			}
+			m.inflightMu.Lock()
+			delete(m.inflight, name)
+			m.inflightMu.Unlock()
 		}()
-		scan(ctx)
+		var o outcome
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					o = outcome{ResultFailed, fmt.Sprintf("scanner panic: %v", r)}
+					logf(name, "recovered from panic: %v", r)
+				}
+			}()
+			scan(ctx)
+		}()
+		done <- o
 	}()
-	if forced == "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		forced, note = ResultTimeout, "scan exceeded its deadline"
+
+	var o outcome
+	timer := time.NewTimer(limit + grace)
+	defer timer.Stop()
+	select {
+	case o = <-done:
+	case <-timer.C:
+		o = outcome{ResultTimeout, "scan did not stop after its deadline; abandoned (one stuck goroutine retained until it returns)"}
+		logf(name, "%s", o.note)
+	}
+	if o.forced == "" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		o = outcome{ResultTimeout, "scan exceeded its deadline"}
 	}
 	end := time.Now()
-	m.board.end(name, start, end, forced, note)
-	if elapsed := end.Sub(start); elapsed > thresholds.HostScanTimeout/2 {
-		logf(name, "scan took %s (approaching the %s timeout)", elapsed, thresholds.HostScanTimeout)
+	m.board.end(name, start, end, o.forced, o.note)
+	if elapsed := end.Sub(start); elapsed > limit/2 {
+		logf(name, "scan took %s (approaching the %s timeout)", elapsed, limit)
 	}
 }
 
@@ -249,6 +307,11 @@ func (m *Manager) Run(ctx context.Context) {
 		logf("manager", "Host Security scanning disabled (-hostsec=false)")
 		return
 	}
+	if !m.running.CompareAndSwap(false, true) {
+		logf("manager", "Run called while already running; ignoring (no duplicate workers)")
+		return
+	}
+	defer m.running.Store(false)
 
 	var wg sync.WaitGroup
 	loop := func(name string, interval time.Duration, scan func(context.Context)) {

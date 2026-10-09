@@ -24,6 +24,7 @@ import (
 	"vanguard/core/internal/database"
 	"vanguard/core/internal/detection"
 	"vanguard/core/internal/firewall"
+	"vanguard/core/internal/health"
 	"vanguard/core/internal/honeypot"
 	"vanguard/core/internal/hostsec"
 	"vanguard/core/internal/intel"
@@ -68,6 +69,9 @@ type app struct {
 	intelM     *intel.Matcher
 	echoSrv    *api.Server
 	echoHandle *echo.Echo // set once startHTTPServer runs; used by shutdown()
+	health     *health.Registry
+
+	shutdownOnce sync.Once
 
 	wg sync.WaitGroup
 }
@@ -176,6 +180,11 @@ func buildApp(cfg serveConfig) (*app, error) {
 		echoSrv.Detectors = hostsecMgr
 	}
 	echoSrv.Intel = iocMatcher
+	reg := newRuntimeRegistry(cfg)
+	echoSrv.Runtime = api.RuntimeSources{Registry: reg, MetricsInterval: cfg.MetricsInterval}
+	if honeypotSrv != nil {
+		echoSrv.Runtime.HoneypotStats = honeypotSrv.Stats
+	}
 
 	return &app{
 		cfg:       cfg,
@@ -188,6 +197,7 @@ func buildApp(cfg serveConfig) (*app, error) {
 		hostsecM:  hostsecMgr,
 		intelM:    iocMatcher,
 		echoSrv:   echoSrv,
+		health:    reg,
 	}, nil
 }
 
@@ -231,7 +241,7 @@ func (a *app) startBackgroundTasks(ctx context.Context) {
 	// host. ---
 	if a.cfg.AuthLogPath != "" {
 		a.goTracked(func() {
-			if err := detection.TailFile(ctx, a.cfg.AuthLogPath, a.engine.IngestAuthLogLine); err != nil {
+			if err := detection.TailFileObserved(ctx, a.cfg.AuthLogPath, a.engine.IngestAuthLogLine, newTailHealth(a.health, "log:auth")); err != nil {
 				log.Printf("[serve] auth log tailer exited with error: %v", err)
 			}
 		})
@@ -239,10 +249,11 @@ func (a *app) startBackgroundTasks(ctx context.Context) {
 		log.Println("[serve] auth log tailing disabled (-auth-log \"\")")
 	}
 
-	for _, path := range a.cfg.WebLogPaths {
+	for i, path := range a.cfg.WebLogPaths {
 		p := path // capture for the closure
+		hname := fmt.Sprintf("log:web%d", i+1)
 		a.goTracked(func() {
-			if err := detection.TailFile(ctx, p, a.engine.IngestWebLogLine); err != nil {
+			if err := detection.TailFileObserved(ctx, p, a.engine.IngestWebLogLine, newTailHealth(a.health, hname)); err != nil {
 				log.Printf("[serve] web log tailer for %s exited with error: %v", p, err)
 			}
 		})
@@ -321,8 +332,12 @@ func (a *app) runMaintenanceLoop(ctx context.Context) {
 func (a *app) runMaintenanceTick(ctx context.Context) {
 	if n, err := a.autopilot.ReapExpiredBans(ctx); err != nil {
 		log.Printf("[serve] maintenance: failed to reap expired bans: %v", err)
-	} else if n > 0 {
-		log.Printf("[serve] maintenance: reaped %d expired ban(s)", n)
+		a.health.Failure("maintenance", health.Failed, "ban expiry sweep failed: "+err.Error())
+	} else {
+		a.health.Success("maintenance")
+		if n > 0 {
+			log.Printf("[serve] maintenance: reaped %d expired ban(s)", n)
+		}
 	}
 
 	now := time.Now().UTC()
@@ -402,6 +417,11 @@ func (a *app) goTracked(fn func()) {
 // prevents SQLite WAL corruption: no goroutine can still be mid-write when
 // Close() runs, because we've proven every one of them has already exited.
 func (a *app) shutdown() {
+	// Repeated shutdown requests (signal + error path) must be harmless.
+	a.shutdownOnce.Do(a.doShutdown)
+}
+
+func (a *app) doShutdown() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownTimeout)
 	defer cancel()
 

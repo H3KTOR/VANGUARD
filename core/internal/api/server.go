@@ -36,6 +36,9 @@ type Server struct {
 
 	// Intel is the local IOC matcher (optional; nil when disabled).
 	Intel *intel.Matcher
+
+	// Runtime feeds GET /api/health/runtime (all fields optional).
+	Runtime RuntimeSources
 }
 
 // DetectorStatusSource is implemented by *hostsec.Manager.
@@ -78,6 +81,7 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.GET("/incidents/:id", s.handleGetIncident)
 	protected.PUT("/incidents/:id/status", s.handleUpdateIncidentStatus)
 	protected.GET("/detectors/status", s.handleDetectorStatus)
+	protected.GET("/health/runtime", s.handleRuntimeHealth)
 	protected.GET("/intel/status", s.handleIntelStatus)
 	protected.GET("/intel/iocs", s.handleListIOCs)
 	protected.GET("/intel/iocs/:id", s.handleGetIOC)

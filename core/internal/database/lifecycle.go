@@ -73,8 +73,11 @@ const (
 	EventVerification = "verification" // read-only check of a response's effect
 )
 
+// MaxEventsPerIncident bounds each incident's audit trail.
+const MaxEventsPerIncident = 200
+
 const (
-	maxEventsPerIncident = 200
+	maxEventsPerIncident = MaxEventsPerIncident
 	maxEventDetailLen    = 512
 	maxEventActorLen     = 128
 )

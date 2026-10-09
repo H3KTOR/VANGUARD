@@ -242,6 +242,10 @@ export async function exportIncident(id) {
   return res.text()
 }
 
+export function getRuntimeHealth() {
+  return request('/health/runtime')
+}
+
 export function getDetectorStatus() {
   return request('/detectors/status')
 }
@@ -342,6 +346,7 @@ export default {
   getIncidentEvents,
   getResponsePlan,
   getDetectorStatus,
+  getRuntimeHealth,
   getIncidentTimeline,
   getIncidentGraph,
   listNotes,

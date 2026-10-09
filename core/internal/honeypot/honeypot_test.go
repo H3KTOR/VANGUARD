@@ -2,8 +2,10 @@ package honeypot
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 )
@@ -78,5 +80,82 @@ func TestUnbindablePortIsSkippedNotFatal(t *testing.T) {
 		t.Fatalf("did not expect any hits from an unbindable port")
 	default:
 		// expected: no panic, no hit, just a skipped decoy
+	}
+}
+
+// Saturation must bound goroutines AND still report the hit: a connection
+// to a decoy is a security signal that may not be dropped.
+func TestSaturationShedsWorkButStillReportsEveryHit(t *testing.T) {
+	const port = 32299
+	var mu sync.Mutex
+	var hits []Hit
+	srv := NewServer([]Decoy{{Port: port, Service: "sat", Banner: "B\r\n"}}, func(h Hit) {
+		mu.Lock()
+		hits = append(hits, h)
+		mu.Unlock()
+	})
+	srv.sem = make(chan struct{}, 2) // tiny bound for the test
+	srv.readTimeout = 1500 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	srv.Start(ctx)
+	time.Sleep(150 * time.Millisecond)
+
+	var conns []net.Conn
+	for i := 0; i < 5; i++ {
+		c, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, c) // hold open, send nothing
+		time.Sleep(40 * time.Millisecond)
+	}
+	deadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(hits)
+		mu.Unlock()
+		if n == 5 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	for _, c := range conns {
+		c.Close()
+	}
+	mu.Lock()
+	got := len(hits)
+	mu.Unlock()
+	st := srv.Stats()
+	if got != 5 {
+		t.Fatalf("every connection must be reported even under saturation, got %d/5", got)
+	}
+	if st.Accepted != 2 || st.Shed != 3 || st.BoundPorts != 1 {
+		t.Fatalf("stats = %+v (want accepted=2 shed=3 bound=1)", st)
+	}
+	cancel()
+	done := make(chan struct{})
+	go func() { srv.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Wait must return after cancellation (no leaked handlers)")
+	}
+}
+
+func TestBindFailureIsCounted(t *testing.T) {
+	ln, err := net.Listen("tcp", ":32298")
+	if err != nil {
+		t.Skip("cannot reserve test port: ", err)
+	}
+	defer ln.Close()
+	srv := NewServer([]Decoy{{Port: 32298, Service: "taken"}}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	srv.Start(ctx)
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+	srv.Wait()
+	if st := srv.Stats(); st.BindFailures != 1 || st.BoundPorts != 0 {
+		t.Fatalf("a decoy that could not bind must be visible: %+v", st)
 	}
 }
