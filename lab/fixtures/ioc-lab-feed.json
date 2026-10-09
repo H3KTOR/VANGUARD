@@ -1,0 +1,14 @@
+{
+  "format": "vanguard-ioc",
+  "version": 1,
+  "source": "lab-feed",
+  "generated_at": "2026-10-01T00:00:00Z",
+  "indicators": [
+    {"type": "ip", "value": "172.28.0.10", "confidence": "high", "description": "lab: the victim's own address (synthetic)", "reference": "https://example.invalid/lab/1"},
+    {"type": "domain", "value": "lab-evil.example.test", "confidence": "medium", "description": "lab: synthetic malicious host"},
+    {"type": "url", "value": "http://lab-evil.example.test/dl/payload.bin?id=7", "description": "lab: synthetic payload URL"},
+    {"type": "ip", "value": "198.51.100.200", "enabled": false, "description": "lab: disabled in the feed"},
+    {"type": "ip", "value": "198.51.100.201", "expires_at": "2020-01-01T00:00:00Z", "description": "lab: already expired"},
+    {"type": "ip", "value": "not-an-ip", "description": "lab: invalid record, must be reported not stored"}
+  ]
+}

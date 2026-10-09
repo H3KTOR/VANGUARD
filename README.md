@@ -8,7 +8,7 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 
 > **Deployment note**: VANGUARD is a traditional host-based Linux daemon (log tailing, raw sockets for the honeypot, direct UFW/iptables execution, an embedded static dashboard). It is **not** a Cloudflare Pages/Workers application — there is no serverless deployment story for this project. It is built, tested, and run directly in this sandbox (a Linux environment) and is intended to ultimately run as a systemd service on a real Linux host.
 
-## Current Status: Steps 1–5 + Attack Correlation Engine + Automated Security Test Lab + VANGUARD Mega Expansion Phase 1 (Host Security) + Phase 2 (Process/File/Network Correlation, System Binary Integrity) + Phase 3 (Advanced Web Security Detection) + Phase 4 (System Posture & Drift Detection) Complete (code + unit tests; Docker lab pending execution)
+## Current Status: Steps 1–5 + Attack Correlation Engine + Automated Security Test Lab + VANGUARD Mega Expansion Phase 1 (Host Security) + Phase 2 (Process/File/Network Correlation, System Binary Integrity) + Phase 3 (Advanced Web Security Detection) + Phase 4 (System Posture & Drift Detection) Complete + Phase 5 (Lifecycle & Verified Response) + Phase 6 (Local Threat Intelligence) implemented (code + unit tests; Docker labs and race tests pending execution)
 
 ### ✅ Completed
 
@@ -160,6 +160,17 @@ Full log, audit and acceptance table: [docs/PHASE5.md](docs/PHASE5.md). Status: 
 - **Scanner health**: `GET /api/detectors/status` and a dashboard banner report each scanner's last run, result (`ok`/`skipped`/`failed`/`timeout`) and `last_clean_scan`; unreadable `/proc`, a missing dpkg database or a panicking scanner can no longer look like a clean host.
 - **Deferred**: cross-detector correlation of Phase 4 findings — every candidate joined actor-less host findings by time proximity alone and would produce misleading "chains" (reasoning in docs/PHASE5.md).
 - **Not yet executed**: `lab/run-phase4.sh`, `lab/run-phase5.sh` (Docker), `go test -race ./...`. On Windows the pre-existing environment failures are unchanged (10 attack-chain, 7 Unix-permission hostsec, 1 honeypot test).
+
+## Phase 6 — Local Threat Intelligence, IOC Matching & Hunting
+
+Plan, audit, results and Definition of Done: [docs/PHASE6.md](docs/PHASE6.md); feed format: [docs/intel/FORMAT.md](docs/intel/FORMAT.md). Status: **Implemented — Verification Pending** (Docker lab and `-race` not run).
+
+- **Offline by design**: indicators (`ip`, `domain`, `url`, `sha256`) are imported from a local, versioned `vanguard-ioc` JSON/JSONL file via `vanguard intel import <file>` or `POST /api/intel/import`. Nothing is fetched; feed text is inert. Imports are bounded (10 MiB / 50 000 records), validated, applied in one transaction, reported per category (new / updated / duplicate / invalid / expired / disabled) and can never replace healthy intelligence with an empty or mostly-invalid feed. Disable or delete a wrong indicator from the **Threat Intel** page or API; a re-import will not re-enable it.
+- **Exact matching only** against what VANGUARD really observes: source addresses of auth/web/honeypot events, the logged `Host` header and request target (only when the access-log format records `Host`), and hashes VANGUARD itself computed for monitored files. No substring or subdomain matching, no DNS, no network lookups. Expired or disabled indicators cannot match.
+- **Incidents**: a direct match creates an `ioc_match` incident whose evidence names the indicator, its source and the confidence *the source* gave it, plus a plain statement of what a match does **not** prove. Risk is graded by source confidence and capped at 55, below the default auto-response threshold — an indicator alone never blocks anything. Unrelated incidents from a listed address are enriched with the matching indicators and, for medium/high-confidence IP indicators, receive the existing reputation bonus (this activates a previously dormant hook).
+- **Hunting**: `GET /api/hunt/matches` and the Hunt tab query a bounded history of recorded matches (30 days / 100 000 rows) with parameterized filters, ≤ 200 results per page. VANGUARD keeps no raw events, so an empty result is not proof a value was never seen.
+- **Deferred**: cross-actor / proximity-only IOC correlation and any attribution (shared infrastructure makes it unreliable).
+- **Not yet executed**: `lab/run-phase6.sh` (and the Phase 4/5 lab scripts), `go test -race ./...`.
 
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.

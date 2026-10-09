@@ -125,7 +125,11 @@ func (e *Engine) raiseIOC(ref intelpkg.Ref, field, matched string, ev *Event) {
 	if ev.Kind == EventHTTPRequest {
 		obs["method"], obs["status"] = ev.Method, ev.StatusCode
 		if ev.Host != "" {
-			obs["host"] = ev.Host
+			h := ev.Host
+			if len(h) > 253 {
+				h = h[:253] // bounded: Host is attacker-controlled
+			}
+			obs["host"] = h
 		}
 	}
 	inc := e.createIncident(database.IncidentIOCMatch, ev, 1, scoreIOC(ref), map[string]any{

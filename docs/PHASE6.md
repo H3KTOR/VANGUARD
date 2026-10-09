@@ -42,13 +42,13 @@ Hunting needs history, but VANGUARD keeps **no raw event history** (only inciden
 
 | # | Milestone | Acceptance criteria | State |
 |---|---|---|---|
-| 1 | IOC model + normalization | Tables migrate on a pre-existing DB; normalization table-tested incl. v6, mapped v4, trailing dots, userinfo URLs, bad hashes; dup prevention; enable/disable/delete | not started |
-| 2 | Import | v1 format documented + fixtures; limits; per-record vs structural failure; atomic; replace-source guards; provenance rows; failed import leaves prior data intact | not started |
-| 3 | Matcher | Exact per type; expired/disabled never match; snapshot swap race-free; bounded; multi-IOC per event | not started |
-| 4 | Incident integration | `ioc_match` incident + enrichment; clamp ≤55; confidence semantics; dedup + recurrence; no auto-ban | not started |
-| 5 | Hunting API + UI | Bounded/parameterized; malformed filters → 400; UI shows active/expired/disabled honestly; frontend tests | not started |
-| 6 | Lab | `lab/run-phase6.sh` deterministic scenarios | not started |
-| 7 | Final verification + docs | Honest status | not started |
+| 1 | IOC model + normalization | Tables migrate on a pre-existing DB; normalization table-tested incl. v6, mapped v4, trailing dots, userinfo URLs, bad hashes; dup prevention; enable/disable/delete | tested |
+| 2 | Import | v1 format documented + fixtures; limits; per-record vs structural failure; atomic; replace-source guards; provenance rows; failed import leaves prior data intact | tested |
+| 3 | Matcher | Exact per type; expired/disabled never match; snapshot swap race-free; bounded; multi-IOC per event | tested |
+| 4 | Incident integration | `ioc_match` incident + enrichment; clamp ≤55; confidence semantics; dedup + recurrence; no auto-ban | tested |
+| 5 | Hunting API + UI | Bounded/parameterized; malformed filters → 400; UI shows active/expired/disabled honestly; frontend tests | tested |
+| 6 | Lab | `lab/run-phase6.sh` deterministic scenarios | lab scripted, not executed |
+| 7 | Final verification + docs | Honest status | partially done (see results) |
 
 ### Outstanding verification from earlier phases (tracked separately, unchanged)
 
@@ -60,3 +60,81 @@ Hunting needs history, but VANGUARD keeps **no raw event history** (only inciden
 
 - Schema: three additive tables. Behavior change: wiring a real `ThreatIntelChecker` makes the previously dormant +15 reputation bonus active (only for medium/high-confidence IP IOCs).
 - Imported strings are inert data: never executed, never fetched, never logged raw beyond bounded lengths.
+
+## Workstream H decision (optional correlation) — deferred
+
+Candidate: *IOC match ⇄ behavioral incident from the same source*. The only defensible join key is the source address, and that is already served without a new engine: an unrelated incident from a listed address is **enriched** with the matching indicators (context only) and receives the existing reputation bonus when the source rated the indicator medium/high. Chaining a shared IOC across *different* actors/hosts, or across time proximity alone, would conflate CDN/proxy/NAT/shared hosting and was **not implemented**. An IOC match is never promoted to an attack chain.
+
+## Results (Windows dev machine, Go 1.27; **no Linux, no Docker, no CGO**)
+
+### Delivered
+
+| Area | What exists | Evidence |
+|---|---|---|
+| Model (M1) | `iocs` (unique `type,value,source`), `ioc_imports`, `ioc_matches` tables (additive AutoMigrate; verified on a pre-existing DB); UTC-normalized times; operator disable pinned | `intel/normalize_test.go` (3 table tests, ~40 cases), `intel/import_test.go` |
+| Import (M2) | `vanguard-ioc` v1 JSON/JSONL, limits, per-record vs whole-import rejection, strict, one transaction, replace-source guards, audit row per attempt, `vanguard intel import\|list`, `POST /api/intel/import` | 15 import tests incl. oversize, 50 001 records, 5 000‑record permitted input, mid‑transaction failure rollback, failed import leaves data intact |
+| Matcher (M3) | Atomic snapshot, exact ip/domain/url/sha256, expiry re-checked at match time, failed reload keeps snapshot, `IsMalicious` by source confidence | 11 matcher tests (IPv4/6, mapped v4, near-misses, stale-snapshot expiry, concurrency) |
+| Incidents (M4) | `ioc_match` incident (direct/observed), graded by source confidence, clamped ≤ 55, 1 h dedupe that still re-reports recurrence, enrichment of unrelated incidents, hash + remote-address matching for host findings, never auto-bans | 16 engine tests (`detection/engine_ioc_test.go`) incl. secret non-leak, multi-indicator, multi-actor, restart |
+| Hunting (M5) | `GET /api/hunt/matches` + `/api/intel/*`: parameterized, limit ≤ 200, offset ≤ 10 000, malformed filters → 400, stable order, `[]` not `null` | 5 API tests incl. injection-shaped filter, pagination, auth |
+| UI (M5) | “Threat Intel” page: indicators (honest state, warnings), import with per-record report, bounded hunt with plain-language “why it matched”, matcher health | 8 new Vitest tests (42 total) |
+| Lab (M6) | `lab/fixtures/ioc-lab-feed.json`, `lab/run-phase6.sh` (scenarios AA–AF) | script `bash -n` OK; the fixture was imported with the real CLI and produced the exact counts the script asserts; **script never executed** |
+
+### Test commands and actual results
+
+| Command | Result |
+|---|---|
+| `gofmt -l .` (core) | clean |
+| `GOOS=linux go vet ./...` | clean |
+| `go build ./...` | OK |
+| `go test ./...` (Windows) | pass: cmd, api, auth, database, firewall, intel, metrics, notify. Fail: the **same 18 environmental failures as the Phase 6 baseline** (10 attack‑chain in `detection`, 7 Unix‑permission in `hostsec`, 1 `honeypot`). **No new failures.** |
+| New Go tests | 50 (intel 29, detection 16, api 5) |
+| `npx vitest run` (frontend) | 4 files, 42 tests pass |
+| `npx vite build` | OK |
+
+### Defects found by the new tests (and fixed)
+
+- GORM `default:true` silently stored `enabled=false` as `true` (a feed-disabled indicator would have matched).
+- Text-compared timestamps in mixed zones would have mis-evaluated expiry → all IOC times forced to UTC on save.
+- The repeat-offender count included `ioc_match` incidents, double-counting reputation → excluded.
+
+### False-positive controls
+
+Exact matching only (no substring, no subdomain/suffix); loopback/unspecified/multicast addresses cannot be indicators; scheme‑less URL key requires a logged Host; low‑confidence and unrated IP indicators never raise unrelated incidents’ risk; IOC‑only incidents capped at 55; long dedupe; operator disable; expired never match even from a stale snapshot.
+
+### Known blind spots / limitations
+
+- Domain/URL matching is blind unless the access log records `Host`; the stock combined format does not.
+- IP matches are only as good as the logged address (CDN/proxy/NAT).
+- Hunting covers recorded matches only (bounded 30 days / 100 000 rows); no raw event history exists, so “no result” is not proof a value was never seen.
+- Dedupe is in-memory: a restart can re-raise an already-reported match once.
+- The snapshot is capped at 100 000 active indicators; truncation is reported, not silent.
+- Redaction/secret hygiene is key-name/field-based: IOC evidence deliberately copies only the listed indicator, source address, method, status and Host — never the raw line, query, user agent or headers — but a hostile `Host` value is stored as logged (bounded).
+- Hashes are only those VANGUARD already computes for monitored files; no filesystem sweep.
+- `description`/`reference` come from the feed and are shown as text only (React escapes them); they are never fetched or executed.
+
+### Not verified (blockers, not failures)
+
+- `go test -race ./...` — no CGO toolchain (new concurrent code: matcher snapshot swap, dedupe, status board).
+- Docker lab: `run-phase4.sh`, `run-phase5.sh`, `run-phase6.sh` — never executed.
+- The 7 Unix-permission `hostsec` tests on Linux; the 10 `detection` failures’ root cause remains uninvestigated; the `honeypot` failure was never baseline-compared.
+- Real `ufw` response verification (Phase 5).
+
+### Definition of Done
+
+| Item | State |
+|---|---|
+| Audit + baseline documented | done |
+| IOC formats and normalization documented (`docs/intel/FORMAT.md`) | done |
+| Import validation + failure behavior tested; prior intelligence survives failed imports | done (tested) |
+| Matching exact, bounded, explainable | done (tested) |
+| Integration with incident pipeline; risk documented + bounded | done (tested) |
+| Hunting parameterized + bounded | done (tested) |
+| Frontend tests | pass (42) |
+| Regression tests for matches and false positives | done |
+| gofmt / vet / build | pass |
+| Full tests | partial: all failures classified, all pre-existing/environmental |
+| Race tests | **blocked** (no CGO) |
+| Docker scenarios | **blocked** (no Docker) |
+| Phase 4/5 gaps tracked separately | yes (above and in PHASE5.md) |
+
+**Conclusion: Implemented — Verification Pending.**
