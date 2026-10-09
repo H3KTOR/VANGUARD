@@ -38,6 +38,8 @@ func main() {
 		runServeCmd(os.Args[2:])
 	case "simulate":
 		runSimulateCmd(os.Args[2:])
+	case "intel":
+		runIntelCmd(os.Args[2:])
 	case "help", "-h", "--help":
 		printUsage()
 	default:
@@ -53,6 +55,7 @@ func printUsage() {
 Usage:
   vanguard serve [flags]                 Run the full monitoring daemon + REST API/dashboard
   vanguard simulate <scenario> [flags]   Run a safe, synthetic attack simulation
+  vanguard intel import|list [flags]     Manage local threat-intelligence indicators (offline)
   vanguard help                          Show this message
 
 Serve flags:

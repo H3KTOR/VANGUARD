@@ -386,3 +386,18 @@ func (db *DB) RecordIOCImport(imp *IOCImport) error {
 		return pruneIOCImports(tx)
 	})
 }
+
+// BeforeSave forces timestamps to UTC. SQLite stores times as text and the
+// active/expired filters compare them lexicographically, which is only
+// correct when every stored value uses the same zone.
+func (i *IOC) BeforeSave(tx *gorm.DB) error {
+	if i.ExpiresAt != nil {
+		u := i.ExpiresAt.UTC()
+		i.ExpiresAt = &u
+	}
+	if i.SourceCreatedAt != nil {
+		u := i.SourceCreatedAt.UTC()
+		i.SourceCreatedAt = &u
+	}
+	return nil
+}
