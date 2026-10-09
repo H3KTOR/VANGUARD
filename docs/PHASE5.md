@@ -29,7 +29,7 @@ Progress log. States: `not started` < `in progress` < `implemented` < `tested` <
 | 3 | Response outcomes + verification + dry-run | Each ban records attempted/succeeded/failed/verification outcome as incident events; read-only verification via `IsBlocked`; verification failure/timeout/inconclusive remain visible and are never "verified"; DB-persist-failure after Block triggers compensating Unblock and is recorded; `GET /incidents/:id/response-plan` is non-mutating and shares policy code with `HandleIncident`; whitelist + Panic Mode untouched | tested |
 | 4 | Operational status | Per-scanner last start/finish/duration/result (`ok`/`skipped`/`failed`/`timeout`) + note; `GET /api/detectors/status`; Phase 4 detectors report `skipped` (not clean) when `/proc`/dpkg unavailable | tested |
 | 5 | Correlation + lab | Decision recorded (below); lab cases only for implemented behavior | lab scripted, not executed; correlation deferred |
-| 6 | Final validation + docs | All applicable checks run and reported honestly | in progress |
+| 6 | Final validation + docs | All applicable checks run and reported honestly | partially done: Windows checks run; race + Docker blocked |
 
 ### Workstream E decision (correlation)
 
