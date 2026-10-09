@@ -150,6 +150,17 @@ Linux only; package drift supports Debian/Ubuntu dpkg only; no eBPF so a listene
 - **Not yet executed**: the Docker lab (`lab/run-phase4.sh`, scenarios P–U) and `go test -race` (no Docker/cgo on the dev machine). Run both on Linux before treating Phase 4 as verified.
 - On Windows, 7 pre-existing Unix-permission hostsec tests and 10 attack-chain tests in `internal/detection` fail identically on the pre-Phase-4 commit (confirmed against a clean worktree); they are environment-related, not Phase 4 regressions.
 
+## Phase 5 — Detection Intelligence, Incident Lifecycle & Verified Response
+
+Full log, audit and acceptance table: [docs/PHASE5.md](docs/PHASE5.md). Status: **Implemented — Verification Pending** (Linux/Docker/`-race` checks not yet run).
+
+- **Evidence & provenance**: every incident's metadata now carries `provenance` (`rule_id`, `rule_revision`, `evidence_kind` = *observed* or *correlated*, and the detector's `limitations`). Secret-keyed values are redacted, metadata is bounded to 16 KiB (with an explicit `evidence_truncated` marker), and the incident-dedupe map is capped and reaped. A new regression corpus found and fixed a real gap: percent-/plus-/double-encoded SQLi/XSS/traversal payloads previously evaded signature matching.
+- **Lifecycle**: explicit transition table (`open → auto_blocked/investigating/resolved/false_positive`, `resolved/false_positive → open/investigating`, …), atomic compare-and-swap updates, illegal or racing changes return HTTP 409. An automated block can no longer overwrite an analyst's decision. A bounded, sanitized audit trail (`incident_events`, `GET /api/incidents/:id/events`) records status changes, response attempts and verifications. It lives in the same SQLite file and is **not tamper-evident**.
+- **Response safety**: `GET /api/incidents/:id/response-plan` previews Autopilot's decision (read-only, `executed:false`); the plan and the executor share one policy function. Bans record `succeeded`/`failed`/`suppressed`/`not_eligible`, then one bounded read-only verification (`verified`/`failed`/`inconclusive`, UFW via `ufw status`). A successful command is never shown as verified; a failed verification keeps the incident open and deactivates the non-enforcing rule; an unpersistable rule rolls its block back. Whitelist and Panic Mode behavior are unchanged.
+- **Scanner health**: `GET /api/detectors/status` and a dashboard banner report each scanner's last run, result (`ok`/`skipped`/`failed`/`timeout`) and `last_clean_scan`; unreadable `/proc`, a missing dpkg database or a panicking scanner can no longer look like a clean host.
+- **Deferred**: cross-detector correlation of Phase 4 findings — every candidate joined actor-less host findings by time proximity alone and would produce misleading "chains" (reasoning in docs/PHASE5.md).
+- **Not yet executed**: `lab/run-phase4.sh`, `lab/run-phase5.sh` (Docker), `go test -race ./...`. On Windows the pre-existing environment failures are unchanged (10 attack-chain, 7 Unix-permission hostsec, 1 honeypot test).
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.
@@ -164,7 +175,7 @@ Linux only; package drift supports Debian/Ubuntu dpkg only; no eBPF so a listene
 3. Add Docker lab attack scenarios exercising all 7 Phase 1+2 Host Security detectors end-to-end (extending `lab/run-tests.sh` / `lab/victim/entrypoint.sh`), mirroring the pattern Phase 3 just established for its own 9 detectors.
 4. Add dedicated dashboard widgets/pages for the Phase 2 (host-security) and Phase 3 (web-security) incident types, beyond the generic incidents feed.
 5. Continue into the mega-prompt's next phase(s) after Phase 3 (e.g. "PHASE 2 — SYSTEM POSTURE": Configuration Posture Auditing, Configuration Drift Detection, Listening Service Drift, Package Drift Detection) and onward through the remaining phases of the mega-prompt's recommended implementation order.
-6. **Known pre-existing issue (not introduced by Phase 1, 2, or 3)**: `go test -race ./...` flags a data race in `internal/firewall.MockExecutor` (unsynchronized map/bool field access from `TestPanicModeAutoRollbackFiresAfterTimeout`'s background auto-rollback goroutine vs. the main test goroutine) — confirmed present before any Phase 1 changes (reproduced against the prior commit) and reconfirmed unchanged after Phase 3. `go test ./...` (without `-race`) passes cleanly across the whole repo, and `go test -race ./internal/detection/...` (the package Phase 3 touched) also passes cleanly with zero races. Should be fixed by adding a `sync.Mutex` to `MockExecutor` in a future pass.
+6. **Former known issue (`MockExecutor` data race)**: fixed in Phase 5 (mutex + concurrent test) but **not yet re-confirmed under `go test -race`**, which needs a CGO-enabled Linux environment.
 
 ## Try It
 
