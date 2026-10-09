@@ -20,8 +20,12 @@ func realUserToken(t *testing.T, db *database.DB, mgr *auth.Manager, email strin
 	if err := db.CreateUser(u); err != nil {
 		t.Fatal(err)
 	}
-	tok, _, err := mgr.IssueToken(u)
+	jti, _ := database.NewSessionID()
+	tok, exp, err := mgr.IssueSessionToken(u, jti)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateSession(&database.Session{ID: jti, UserID: u.ID, ExpiresAt: exp}); err != nil {
 		t.Fatal(err)
 	}
 	return tok

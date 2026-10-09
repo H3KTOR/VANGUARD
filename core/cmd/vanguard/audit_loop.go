@@ -33,9 +33,19 @@ func (a *app) runAuditLoop(ctx context.Context) {
 			return
 		case <-seal.C:
 			a.auditSealOnce()
+			a.purgeSessions()
 		case <-verify.C:
 			a.auditVerifyOnce()
 		}
+	}
+}
+
+// purgeSessions removes expired sessions and sessions of vanished accounts (bounded).
+func (a *app) purgeSessions() {
+	if n, err := a.db.PurgeSessions(time.Now().UTC(), 1000); err != nil {
+		log.Printf("[auth] session purge failed: %v", err)
+	} else if n > 0 {
+		log.Printf("[auth] purged %d expired session(s)", n)
 	}
 }
 

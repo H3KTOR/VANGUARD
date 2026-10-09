@@ -33,6 +33,10 @@ var routeTable = map[string]struct {
 	"POST /api/auth/login":                 {public, false}, // writes last_login only
 	"POST /api/auth/register":              {public, true},  // bootstrap, then admin-only (checked in the handler)
 	"GET /api/auth/me":                     {anyUser, false},
+	"POST /api/auth/logout":                {anyUser, true},
+	"GET /api/auth/sessions":               {anyUser, false},
+	"POST /api/auth/sessions/revoke-all":   {anyUser, true},
+	"POST /api/users/:id/revoke-sessions":  {adminOnly, true},
 	"GET /api/dashboard/summary":           {anyUser, false},
 	"GET /api/incidents":                   {anyUser, false},
 	"GET /api/incidents/:id":               {anyUser, false},

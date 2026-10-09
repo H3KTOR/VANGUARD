@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"gorm.io/gorm"
@@ -153,9 +154,16 @@ func (s *Server) handleLogin(c echo.Context) error {
 		return bad
 	}
 
-	token, expiresAt, err := s.Auth.IssueToken(user)
+	jti, err := database.NewSessionID()
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to issue token")
+	}
+	token, expiresAt, err := s.Auth.IssueSessionToken(user, jti)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to issue token")
+	}
+	if err := s.DB.CreateSession(&database.Session{ID: jti, UserID: user.ID, ExpiresAt: expiresAt, ClientIP: c.RealIP()}); err != nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "could not start a session")
 	}
 	s.loginLimiter.reset(c.RealIP())
 	_ = s.DB.RecordAdminAudit(&database.AdminAudit{Actor: user.Email, ActorRole: string(user.Role), Action: "auth.login", Target: "user:" + strconv.FormatUint(uint64(user.ID), 10), Result: auditOK})
@@ -232,6 +240,9 @@ func (s *Server) handleRegister(c echo.Context) error {
 		}
 		// The token must still belong to a live, active admin.
 		live, lerr := s.DB.GetUserByID(claims.UserID)
+		if _, serr := s.DB.ActiveSession(claims.ID, claims.UserID, time.Now().UTC()); serr != nil {
+			lerr = serr // a revoked or missing session cannot authorize account creation
+		}
 		if lerr != nil || !live.IsActive || live.Role != database.RoleAdmin {
 			s.authFailed(c)
 			return echo.NewHTTPError(http.StatusForbidden, "registration is closed; ask an existing admin to create your account")

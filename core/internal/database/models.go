@@ -674,6 +674,7 @@ func AllModels() []any {
 		&RetentionRun{},
 		&AdminAudit{},
 		&AuditLedgerEntry{},
+		&Session{},
 	}
 }
 

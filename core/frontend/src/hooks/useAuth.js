@@ -10,8 +10,8 @@ export function useAuth() {
   const [user, setUser] = useState(() => api.getStoredUser())
   const [checking, setChecking] = useState(true)
 
-  const logout = useCallback(() => {
-    api.logout()
+  const logout = useCallback(async () => {
+    await api.logout()
     setUser(null)
   }, [])
 

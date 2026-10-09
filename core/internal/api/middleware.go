@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -54,6 +55,14 @@ func (s *Server) jwtMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication backend unavailable")
 		case !user.IsActive || !strings.EqualFold(user.Email, claims.Email):
 			return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired token")
+		}
+		// ...and the token must still be backed by a live server-side session
+		// (logout, "revoke all" and administrative revocation delete or revoke it).
+		if _, serr := s.DB.ActiveSession(claims.ID, claims.UserID, time.Now().UTC()); serr != nil {
+			if errors.Is(serr, database.ErrSessionInvalid) {
+				return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired token")
+			}
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication backend unavailable")
 		}
 		claims.Role = user.Role
 		c.Set(claimsContextKey, claims)

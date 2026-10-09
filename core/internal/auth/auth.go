@@ -73,6 +73,29 @@ func CheckPassword(hash, plaintext string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(plaintext)) == nil
 }
 
+// IssueSessionToken creates a signed JWT bound to a server-side session id (jti).
+// The caller must store a database.Session with that id; without it the token is
+// rejected by the API.
+func (m *Manager) IssueSessionToken(u *database.User, jti string) (string, time.Time, error) {
+	now := time.Now().UTC()
+	expiresAt := now.Add(m.tokenTTL)
+	claims := Claims{
+		UserID: u.ID, Email: u.Email, Role: u.Role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			Issuer: m.issuer, Subject: fmt.Sprintf("%d", u.ID), ID: jti,
+			IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+	}
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(m.secret)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("auth: failed to sign token: %w", err)
+	}
+	return signed, expiresAt, nil
+}
+
+// TTL returns the configured token lifetime.
+func (m *Manager) TTL() time.Duration { return m.tokenTTL }
+
 // IssueToken creates a signed JWT for the given user.
 func (m *Manager) IssueToken(u *database.User) (string, time.Time, error) {
 	now := time.Now().UTC()

@@ -122,6 +122,10 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.Use(s.jwtMiddleware)
 
 	protected.GET("/auth/me", s.handleMe)
+	protected.POST("/auth/logout", s.handleLogout)
+	protected.GET("/auth/sessions", s.handleListSessions)
+	protected.POST("/auth/sessions/revoke-all", s.handleRevokeAllOwn)
+	protected.POST("/users/:id/revoke-sessions", s.handleAdminRevokeSessions)
 
 	protected.GET("/dashboard/summary", s.handleDashboardSummary)
 

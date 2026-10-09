@@ -127,7 +127,15 @@ export async function register(email, password, role) {
   })
 }
 
-export function logout() {
+// logout ends the session on the SERVER first (the token stops working at
+// once), then forgets it locally. If the server cannot be reached the local copy
+// is still cleared, but the token stays valid until it expires or is revoked.
+export async function logout() {
+  try {
+    await request('/auth/logout', { method: 'POST' })
+  } catch {
+    // already invalid, or the server is unreachable
+  }
   clearSession()
 }
 

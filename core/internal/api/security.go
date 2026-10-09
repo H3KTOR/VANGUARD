@@ -123,8 +123,19 @@ func securityHeaders(next echo.HandlerFunc) echo.HandlerFunc {
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
 		if strings.HasPrefix(c.Request().URL.Path, "/api/") {
 			h.Set("Cache-Control", "no-store")
+			h.Set("Content-Security-Policy", APICSP)
+		} else {
+			h.Set("Content-Security-Policy", DashboardCSP)
+		}
+		// HSTS only when THIS connection is TLS: forwarded headers are not trusted, so
+		// behind a TLS proxy the proxy must send it.
+		if c.Request().TLS != nil {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
 		}
 		return next(c)
 	}
@@ -190,3 +201,18 @@ func isLoopback(c echo.Context) bool {
 	ip := net.ParseIP(c.RealIP())
 	return ip != nil && ip.IsLoopback()
 }
+
+// Content Security Policy.
+//
+// DashboardCSP matches the production build of the embedded dashboard: one
+// module script and one stylesheet from the same origin, no inline script or
+// style elements, no eval, no third-party origins (the Google Fonts links were
+// removed in Phase 16: a local-first console should not call out to a font CDN
+// on every page load). It is a second line of defence that makes injected
+// script harder to run; it does NOT make XSS impossible or protect a token an
+// attacker already read.
+const DashboardCSP = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; " +
+	"connect-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'"
+
+// APICSP is for JSON responses: nothing may load.
+const APICSP = "default-src 'none'; frame-ancestors 'none'"

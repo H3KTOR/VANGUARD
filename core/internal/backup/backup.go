@@ -185,6 +185,11 @@ func Create(db *database.DB, o CreateOptions) (name string, m *Manifest, err err
 	}
 	_ = os.Chmod(dbPath, 0o600)
 
+	// Sessions are never part of a backup: restoring must not resurrect tokens that
+	// were revoked (or issued) after the backup was taken.
+	if err := dropSessions(dbPath); err != nil {
+		return "", nil, fmt.Errorf("could not remove sessions from the snapshot: %w", err)
+	}
 	if o.ExcludeUsers {
 		if err := dropUsers(dbPath); err != nil {
 			return "", nil, fmt.Errorf("could not exclude user accounts: %w", err)
@@ -226,6 +231,22 @@ func Create(db *database.DB, o CreateOptions) (name string, m *Manifest, err err
 	}
 	ok = true
 	return name, m, nil
+}
+
+func dropSessions(path string) error {
+	d, err := sql.Open("sqlite", path)
+	if err != nil {
+		return err
+	}
+	defer closeQuiet(d)
+	if _, err := d.Exec("DELETE FROM sessions"); err != nil {
+		if strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return err
+	}
+	_, err = d.Exec("VACUUM")
+	return err
 }
 
 func dropUsers(path string) error {
