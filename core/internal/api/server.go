@@ -64,6 +64,7 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.GET("/incidents/:id", s.handleGetIncident)
 	protected.PUT("/incidents/:id/status", s.handleUpdateIncidentStatus)
 	protected.GET("/incidents/:id/events", s.handleListIncidentEvents)
+	protected.GET("/incidents/:id/response-plan", s.handleIncidentResponsePlan)
 	protected.POST("/incidents/:id/block", s.handleBlockIncidentIP)
 
 	protected.GET("/firewall/rules", s.handleListFirewallRules)

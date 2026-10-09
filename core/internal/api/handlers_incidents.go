@@ -123,6 +123,32 @@ func (s *Server) handleListIncidentEvents(c echo.Context) error {
 	return c.JSON(http.StatusOK, echo.Map{"events": evs, "count": len(evs)})
 }
 
+// handleIncidentResponsePlan previews what Autopilot would do for this
+// incident under its current policy WITHOUT executing anything: only
+// database reads, no firewall calls, no writes. The response carries
+// executed=false so a plan can never be mistaken for an action taken.
+func (s *Server) handleIncidentResponsePlan(c echo.Context) error {
+	id, err := parseUintParam(c, "id")
+	if err != nil {
+		return err
+	}
+	inc, err := s.DB.GetIncident(id)
+	if err != nil {
+		if errors.Is(err, database.ErrNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "incident not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fetch incident")
+	}
+	if s.Autopilot == nil {
+		return echo.NewHTTPError(http.StatusServiceUnavailable, "autopilot is not configured on this instance")
+	}
+	d, err := s.Autopilot.Plan(inc)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to evaluate response policy")
+	}
+	return c.JSON(http.StatusOK, d)
+}
+
 type blockIncidentRequest struct {
 	// DurationMinutes overrides the Autopilot's default/per-type TTL for
 	// this manual block. 0 means "use Autopilot's configured default".

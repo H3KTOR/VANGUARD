@@ -65,3 +65,33 @@ func TestIncidentLifecycleViaAPI(t *testing.T) {
 		t.Fatalf("audit trail wrong: %+v", out.Events)
 	}
 }
+
+func TestResponsePlanEndpointIsReadOnly(t *testing.T) {
+	ts, db := testServer(t)
+	token := bootstrapAdminToken(t, ts)
+	inc := &database.Incident{Type: database.IncidentSSHBruteForce, SourceIP: "203.0.113.77", RiskScore: 80}
+	if err := db.CreateIncident(inc); err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/api/incidents/%d/response-plan", ts.URL, inc.ID), nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var d map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&d)
+	if resp.StatusCode != http.StatusOK || d["would_ban"] != true || d["executed"] != false {
+		t.Fatalf("plan = %d %v", resp.StatusCode, d)
+	}
+	if banned, _ := db.IsBanned(inc.SourceIP); banned {
+		t.Fatal("plan endpoint must not ban")
+	}
+	if evs, _ := db.ListIncidentEvents(inc.ID); len(evs) != 0 {
+		t.Fatalf("plan endpoint must not write audit events: %v", evs)
+	}
+	if cur, _ := db.GetIncident(inc.ID); cur.Status != database.StatusOpen {
+		t.Fatalf("plan endpoint changed status: %s", cur.Status)
+	}
+}

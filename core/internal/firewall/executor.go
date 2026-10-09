@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 )
 
 // Executor is the low-level interface for actually changing OS firewall
@@ -70,6 +72,18 @@ func (u *UFWExecutor) run(ctx context.Context, args ...string) (string, error) {
 		return string(out), fmt.Errorf("firewall: command %q %v failed: %w (output: %s)", name, args, err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+// IsBlocked implements BlockVerifier: a read-only `ufw status` query.
+// An inactive firewall is reported as not blocking (a deny rule that is
+// not being enforced protects nothing).
+func (u *UFWExecutor) IsBlocked(ctx context.Context, ip string) (bool, error) {
+	out, err := u.run(ctx, "status")
+	if err != nil {
+		return false, err
+	}
+	denied, active := ufwStatusDenies(out, ip)
+	return denied && active, nil
 }
 
 // Block adds a `ufw deny from <ip>` rule.
@@ -133,12 +147,19 @@ func (u *UFWExecutor) Status(ctx context.Context) (string, error) {
 // MockExecutor records every call it receives instead of touching any real
 // OS firewall state. Safe for concurrent use.
 type MockExecutor struct {
+	mu        sync.Mutex
 	Blocked   map[string]bool
 	Allowed   map[string]bool
 	Lockdown  bool
 	KeepIPs   []string
 	KeepPorts []int
 	Calls     []string
+
+	// Fault injection for tests of the response/verification paths.
+	BlockErr    error // Block returns this error
+	NoEffect    bool  // Block "succeeds" but nothing is actually blocked
+	VerifyErr   error // IsBlocked returns this error
+	VerifyDelay time.Duration
 }
 
 // NewMockExecutor constructs an empty MockExecutor.
@@ -146,20 +167,48 @@ func NewMockExecutor() *MockExecutor {
 	return &MockExecutor{Blocked: map[string]bool{}, Allowed: map[string]bool{}}
 }
 
+// IsBlocked implements BlockVerifier against the mock's recorded state.
+func (m *MockExecutor) IsBlocked(ctx context.Context, ip string) (bool, error) {
+	if m.VerifyDelay > 0 {
+		select {
+		case <-time.After(m.VerifyDelay):
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.VerifyErr != nil {
+		return false, m.VerifyErr
+	}
+	return m.Blocked[ip], nil
+}
+
 func (m *MockExecutor) Block(ctx context.Context, ip string) error {
-	m.Blocked[ip] = true
-	delete(m.Allowed, ip)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.BlockErr != nil {
+		return m.BlockErr
+	}
+	if !m.NoEffect {
+		m.Blocked[ip] = true
+		delete(m.Allowed, ip)
+	}
 	m.Calls = append(m.Calls, "block "+ip)
 	return nil
 }
 
 func (m *MockExecutor) Unblock(ctx context.Context, ip string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.Blocked, ip)
 	m.Calls = append(m.Calls, "unblock "+ip)
 	return nil
 }
 
 func (m *MockExecutor) Allow(ctx context.Context, ip string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Allowed[ip] = true
 	delete(m.Blocked, ip)
 	m.Calls = append(m.Calls, "allow "+ip)
@@ -167,6 +216,8 @@ func (m *MockExecutor) Allow(ctx context.Context, ip string) error {
 }
 
 func (m *MockExecutor) EnableLockdown(ctx context.Context, keepIPs []string, keepPorts []int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Lockdown = true
 	m.KeepIPs = keepIPs
 	m.KeepPorts = keepPorts
@@ -175,11 +226,15 @@ func (m *MockExecutor) EnableLockdown(ctx context.Context, keepIPs []string, kee
 }
 
 func (m *MockExecutor) DisableLockdown(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.Lockdown = false
 	m.Calls = append(m.Calls, "disable_lockdown")
 	return nil
 }
 
 func (m *MockExecutor) Status(ctx context.Context) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return fmt.Sprintf("lockdown=%v blocked=%d allowed=%d", m.Lockdown, len(m.Blocked), len(m.Allowed)), nil
 }

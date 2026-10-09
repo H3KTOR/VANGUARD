@@ -164,67 +164,75 @@ func (a *Autopilot) OnIncident(inc *database.Incident) {
 }
 
 // HandleIncident applies Autopilot policy to a single incident: fail-safe
-// whitelist check, minimum-score gate, then a TTL ban if warranted.
+// whitelist check, minimum-score gate, then a TTL ban if warranted. The
+// decision itself is made by Plan() -- the same function the read-only
+// response-plan API uses -- so a preview can never disagree with what is
+// executed. Every outcome (including "not eligible"/"suppressed") is
+// recorded in the incident's audit trail.
 // Exposed as a public method (not just via OnIncident) so the REST API can
-// invoke the same logic on-demand for a manual "block this IP" action.
+// invoke the same logic on-demand.
 func (a *Autopilot) HandleIncident(ctx context.Context, inc *database.Incident) error {
-	if !a.cfg.Enabled {
-		log.Printf("[autopilot] disabled; incident #%d (%s, risk %d) left for manual review", inc.ID, inc.Type, inc.RiskScore)
-		return nil
+	var idp *uint
+	if inc.ID != 0 {
+		idp = &inc.ID
 	}
-
-	whitelisted, err := a.db.IsWhitelisted(inc.SourceIP)
+	d, err := a.Plan(inc)
 	if err != nil {
-		return fmt.Errorf("whitelist check failed: %w", err)
+		a.recordEvent(idp, database.EventResponse, "failed", "policy evaluation failed: "+truncateDetail(err.Error()))
+		return err
 	}
-	if whitelisted {
-		log.Printf("[autopilot] SKIPPED ban for incident #%d: %s is whitelisted (fail-safe)", inc.ID, inc.SourceIP)
+	if !d.WouldBan {
+		switch d.Outcome {
+		case "disabled":
+			log.Printf("[autopilot] disabled; incident #%d (%s, risk %d) left for manual review", inc.ID, inc.Type, inc.RiskScore)
+		case "whitelisted":
+			log.Printf("[autopilot] SKIPPED ban for incident #%d: %s is whitelisted (fail-safe)", inc.ID, inc.SourceIP)
+		case "below_threshold":
+			log.Printf("[autopilot] incident #%d (risk %d) below auto-ban threshold (%d); left open for manual review",
+				inc.ID, inc.RiskScore, a.cfg.MinRiskScoreToBan)
+		case "already_banned":
+			log.Printf("[autopilot] %s already banned; incident #%d recorded but no new rule created", inc.SourceIP, inc.ID)
+		}
+		outcome := "not_eligible"
+		if d.Outcome == "whitelisted" {
+			outcome = "suppressed"
+		}
+		a.recordEvent(idp, database.EventResponse, outcome, d.Outcome+": "+d.Reason)
 		return nil
 	}
 
-	if inc.RiskScore < a.cfg.MinRiskScoreToBan {
-		log.Printf("[autopilot] incident #%d (risk %d) below auto-ban threshold (%d); left open for manual review",
-			inc.ID, inc.RiskScore, a.cfg.MinRiskScoreToBan)
-		return nil
-	}
-
-	alreadyBanned, err := a.db.IsBanned(inc.SourceIP)
-	if err != nil {
-		return fmt.Errorf("ban check failed: %w", err)
-	}
-	if alreadyBanned {
-		log.Printf("[autopilot] %s already banned; incident #%d recorded but no new rule created", inc.SourceIP, inc.ID)
-		return nil
-	}
-
-	duration := a.cfg.DefaultBanDuration
-	if d, ok := a.cfg.BanDurationByType[inc.Type]; ok {
-		duration = d
-	}
-	if duration <= 0 {
-		duration = DefaultTTL
-	}
-
-	return a.Ban(ctx, inc.SourceIP, fmt.Sprintf("Autopilot: %s (incident #%d, risk %d)", inc.Type, inc.ID, inc.RiskScore), duration, &inc.ID, database.FirewallSourceAutopilot)
+	return a.Ban(ctx, inc.SourceIP, fmt.Sprintf("Autopilot: %s (incident #%d, risk %d)", inc.Type, inc.ID, inc.RiskScore),
+		time.Duration(d.DurationSeconds)*time.Second, idp, database.FirewallSourceAutopilot)
 }
 
 // Ban issues a TTL firewall block on ip: it re-checks the whitelist
 // fail-safe (so this can be called safely from any code path, not just
 // HandleIncident), executes the OS-level block, persists a FirewallRule,
-// and -- if incidentID is non-nil -- flips that incident's status to
-// auto_blocked.
+// verifies the effect read-only, and records every step as an incident
+// audit event when incidentID is non-nil.
+//
+// Honesty rules: a successful command is recorded as "succeeded", never as
+// "verified"; verification that fails keeps the incident open and
+// deactivates the (non-enforcing) rule so a later incident can retry;
+// inconclusive verification keeps the block (removing protection on
+// uncertainty would be worse) but is recorded as inconclusive.
 func (a *Autopilot) Ban(ctx context.Context, ip, reason string, duration time.Duration, incidentID *uint, source database.FirewallSource) error {
 	whitelisted, err := a.db.IsWhitelisted(ip)
 	if err != nil {
+		a.recordEvent(incidentID, database.EventResponse, "failed", "whitelist check failed: "+truncateDetail(err.Error()))
 		return fmt.Errorf("whitelist check failed: %w", err)
 	}
 	if whitelisted {
+		a.recordEvent(incidentID, database.EventResponse, "suppressed", "refused: "+ip+" is protected by the fail-safe whitelist")
 		return fmt.Errorf("refusing to ban %s: protected by fail-safe whitelist", ip)
 	}
 
 	if err := a.exec.Block(ctx, ip); err != nil {
+		a.recordEvent(incidentID, database.EventResponse, "failed", "firewall block failed: "+truncateDetail(err.Error()))
 		return fmt.Errorf("firewall block failed: %w", err)
 	}
+	a.recordEvent(incidentID, database.EventResponse, "succeeded",
+		fmt.Sprintf("block command for %s returned success (ttl %s); effect not yet verified", ip, duration))
 
 	unbanAt := time.Now().UTC().Add(duration)
 	rule := &database.FirewallRule{
@@ -237,14 +245,33 @@ func (a *Autopilot) Ban(ctx context.Context, ip, reason string, duration time.Du
 		UnbanAt:    &unbanAt,
 	}
 	if err := a.db.CreateFirewallRule(rule); err != nil {
+		// The OS-level block exists but we cannot track/expire it: undo it
+		// rather than leave an orphan that would never be reaped.
+		rb := "ok"
+		if uerr := a.exec.Unblock(ctx, ip); uerr != nil {
+			rb = "FAILED: " + truncateDetail(uerr.Error())
+		}
+		a.recordEvent(incidentID, database.EventResponse, "failed",
+			"could not persist firewall rule ("+truncateDetail(err.Error())+"); rollback of block: "+rb)
 		return fmt.Errorf("failed to persist firewall rule: %w", err)
 	}
+
+	vOutcome, vDetail := a.verifyBlock(ctx, ip)
+	a.recordEvent(incidentID, database.EventVerification, vOutcome, vDetail)
+	if vOutcome == "failed" {
+		log.Printf("[autopilot] VERIFICATION FAILED for ban of %s (incident %v): %s", ip, incidentID, vDetail)
+		if derr := a.db.DeactivateFirewallRule(rule.ID); derr != nil {
+			log.Printf("[autopilot] failed to deactivate non-enforcing rule #%d: %v", rule.ID, derr)
+		}
+		return fmt.Errorf("ban of %s could not be verified: %s", ip, vDetail)
+	}
+
 	if incidentID != nil {
 		if _, err := a.db.MarkAutoBlocked(*incidentID, "autopilot", reason); err != nil {
 			log.Printf("[autopilot] failed to update incident #%d status: %v", *incidentID, err)
 		}
 	}
-	log.Printf("[autopilot] banned %s for %s (rule #%d, expires %s)", ip, duration, rule.ID, unbanAt.Format(time.RFC3339))
+	log.Printf("[autopilot] banned %s for %s (rule #%d, expires %s, verification: %s)", ip, duration, rule.ID, unbanAt.Format(time.RFC3339), vOutcome)
 
 	// Push a real-time alert (e.g. Telegram) on a successful ban. Best-effort
 	// and fully decoupled from the ban's own success: alert delivery never
