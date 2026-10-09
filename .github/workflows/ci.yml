@@ -1,7 +1,20 @@
-# VANGUARD CI -- no secrets, no cloud credentials, no deployment.
-# Every job is independent; a job that cannot run is reported by GitHub as
-# skipped/failed, never as a pass. This workflow was written on a machine
-# without Linux/Docker/CGO and has NOT been executed yet (docs/PHASE8.md).
+# VANGUARD CI -- no secrets, no cloud credentials, no deployment, no signing.
+#
+# STATUS: rewritten in Phase 14 and NEVER EXECUTED. It was written on a Windows
+# machine without Docker, a C compiler or a GitHub runner. The first real run is
+# its verification, and any job failing on that run is information, not noise.
+#
+# How results are classified (one row per job; see docs/PHASE14.md):
+#   static / unit / frontend / race / windows / release-check / lab are REQUIRED
+#   and are all listed in the final `gate` job. `vuln` is ADVISORY: it needs an
+#   external vulnerability database, so it reports but does not gate.
+#   A job that did not run (skipped, cancelled, blocked) makes `gate` fail: only
+#   `success` counts as a pass. The Docker lab exits 3 when it was blocked, which
+#   fails its job; a blocked lab can never look like a successful one.
+#   Tests skipped for platform reasons are counted as skipped (never as passed) by
+#   tools/valreport in the `report` job.
+# Actions are referenced by major version tag, not by commit SHA (see the
+# supply-chain notes in docs/PHASE14.md).
 name: ci
 on:
   push:
@@ -10,10 +23,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # ------------------------------------------------------------------ static
   static:
-    name: format + vet (linux target)
+    name: static checks (format, vet, modules, pure-Go build, deploy scripts)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults: { run: { working-directory: core } }
     steps:
       - uses: actions/checkout@v4
@@ -22,26 +41,61 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
-      - name: production build is pure Go (CGO disabled)
-        run: CGO_ENABLED=0 go build -o /dev/null ./cmd/vanguard
+      - name: modules are verified and tidy
+        run: |
+          go mod verify
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+      - name: production build is pure Go (CGO disabled) for every release target
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /dev/null ./cmd/vanguard
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /dev/null ./cmd/vanguard
+      - name: deployment scripts are syntactically valid (this does NOT run them)
+        working-directory: .
+        run: for f in deploy/*.sh lab/*.sh; do bash -n "$f" || exit 1; done
 
+  # ------------------------------------------------------------------- unit
   go-test:
-    name: go test (linux)
+    name: go test (linux, Go ${{ matrix.go }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # "mod" = the minimum declared in core/go.mod (untested until this runs);
+        # "stable" = the current release.
+        go: [mod, stable]
     defaults: { run: { working-directory: core } }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
-        with: { go-version-file: core/go.mod }
+        with:
+          go-version-file: ${{ matrix.go == 'mod' && 'core/go.mod' || '' }}
+          go-version: ${{ matrix.go == 'stable' && 'stable' || '' }}
       - name: tests (JSON for the validation report)
         run: go test -json ./... | tee gotest.json
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && matrix.go == 'mod'
         with: { name: gotest-linux, path: core/gotest.json }
 
+  go-test-windows:
+    name: go test (windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults: { run: { working-directory: core, shell: bash } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: core/go.mod }
+      - run: go test -json ./... | tee gotest.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: gotest-windows, path: core/gotest.json }
+
   race:
-    name: go test -race (needs CGO + C compiler for the TEST binary only)
+    name: go test -race (needs CGO + a C compiler for the TEST binary only)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults: { run: { working-directory: core } }
     steps:
       - uses: actions/checkout@v4
@@ -50,9 +104,11 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y gcc
       - run: CGO_ENABLED=1 go test -race ./...
 
+  # --------------------------------------------------------------- frontend
   frontend:
     name: frontend tests + build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults: { run: { working-directory: core/frontend } }
     steps:
       - uses: actions/checkout@v4
@@ -61,24 +117,86 @@ jobs:
       - run: npm ci
       - run: npx vitest run
       - run: npx vite build
+      - name: npm audit (ADVISORY - reported, does not gate)
+        continue-on-error: true
+        run: npm audit --audit-level=high
 
+  # ------------------------------------------------------- advisory: vulns
+  vuln:
+    name: dependency vulnerability scan (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults: { run: { working-directory: core } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: core/go.mod }
+      - name: govulncheck (needs network access to the Go vulnerability database)
+        id: scan
+        continue-on-error: true
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./... | tee govulncheck.txt
+      - name: say plainly what happened
+        if: always()
+        run: |
+          {
+            echo "### govulncheck"
+            if [ "${{ steps.scan.outcome }}" = success ]; then echo "No known vulnerabilities reported by govulncheck for the code paths it analysed."
+            else echo "govulncheck did NOT pass or could not run (outcome: ${{ steps.scan.outcome }}). Read govulncheck.txt; this is NOT a clean result."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: govulncheck, path: core/govulncheck.txt, if-no-files-found: ignore }
+
+  # ------------------------------------------------------------------ lab
   lab:
     name: docker lab (all suites, then teardown)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     needs: [static, go-test]
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y jq
-      - name: run every suite (exit 0 pass / 1 fail / 3 blocked)
+      - name: run every suite (exit 0 pass / 1 fail / 3 blocked - 1 and 3 both fail this job)
         run: bash lab/run-all.sh --teardown
+      - name: lab summary
+        if: always()
+        run: |
+          {
+            echo "### Docker lab"
+            if [ -f lab/results/summary.json ]; then echo '```json'; cat lab/results/summary.json; echo '```'
+            else echo "No summary was produced: the lab did NOT run to completion."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: lab-results, path: lab/results }
+        with: { name: lab-results, path: lab/results, if-no-files-found: ignore }
 
+  # -------------------------------------------------------------- release
+  release-check:
+    name: unsigned release artifacts + same-runner rebuild check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [static, go-test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: core/go.mod }
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm, cache-dependency-path: core/frontend/package-lock.json }
+      - run: cd core/frontend && npm ci && npm run build
+      - name: "build, then rebuild and compare (same runner only; NOT a reproducibility claim)"
+        run: bash deploy/release.sh --version "ci-${GITHUB_SHA::12}" --out dist --check-repro
+      - name: checksums verify
+        run: cd dist && sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with: { name: release-unsigned, path: dist }
+
+  # --------------------------------------------------------------- report
   report:
     name: validation report
     runs-on: ubuntu-latest
-    needs: [go-test, race, lab]
+    needs: [go-test, go-test-windows, race, lab]
     if: always()
     defaults: { run: { working-directory: core } }
     steps:
@@ -86,17 +204,45 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: core/go.mod }
       - uses: actions/download-artifact@v4
-        with: { name: gotest-linux, path: in }
+        with: { name: gotest-linux, path: in/linux }
+        continue-on-error: true
+      - uses: actions/download-artifact@v4
+        with: { name: gotest-windows, path: in/windows }
         continue-on-error: true
       - uses: actions/download-artifact@v4
         with: { name: lab-results, path: in/lab }
         continue-on-error: true
-      - name: build report from whatever actually ran
+      - name: build one report per platform from whatever actually ran
         run: |
-          args=""
-          [ -f in/gotest.json ] && args="$args -gotest in/gotest.json"
-          [ -f in/lab/summary.json ] && args="$args -lab in/lab/summary.json"
-          go run ./tools/valreport $args -blocked "race=see the race job result,real ufw verification=not exercised in CI" -out in/validation-linux
+          race="${{ needs.race.result }}"; lab="${{ needs.lab.result }}"
+          blocked="race=job result was ${race},docker lab=job result was ${lab},real ufw verification=not exercised in CI"
+          if [ -f in/linux/gotest.json ]; then
+            args="-gotest in/linux/gotest.json"; [ -f in/lab/summary.json ] && args="$args -lab in/lab/summary.json"
+            go run ./tools/valreport $args -blocked "$blocked" -out in/validation-linux
+          fi
+          if [ -f in/windows/gotest.json ]; then
+            go run ./tools/valreport -gotest in/windows/gotest.json -blocked "linux-only behaviour=not covered by a windows run" -out in/validation-windows
+          fi
+          for f in in/validation-*.md; do [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"; done
+          true
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: validation-report, path: core/in }
+        with: { name: validation-report, path: core/in, if-no-files-found: ignore }
+
+  # ----------------------------------------------------------------- gate
+  gate:
+    name: required checks (only 'success' counts as a pass)
+    runs-on: ubuntu-latest
+    needs: [static, go-test, go-test-windows, race, frontend, lab, release-check]
+    if: always()
+    steps:
+      - name: fail unless every required job succeeded
+        run: |
+          echo '${{ toJSON(needs) }}' > needs.json
+          bad=$(grep -o '"result": *"[a-z_]*"' needs.json | grep -v '"success"' || true)
+          if [ -n "$bad" ]; then
+            echo "Not every required job succeeded (skipped, cancelled, failed and blocked all count as NOT passed):"
+            cat needs.json
+            exit 1
+          fi
+          echo "All required jobs succeeded. (The advisory vulnerability scan is reported separately.)"

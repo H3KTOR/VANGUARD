@@ -237,6 +237,16 @@ Findings, full route inventory, trust boundary and compatibility notes: [docs/PH
 - **Bounds & auditability**: body/header/time limits, strict filters and ranges, gated expensive admin operations, sanitized errors, and an `admin_audits` trail (`GET /api/audit/admin`) for privileged actions. A test fails if a route is added without a documented authorization expectation.
 - **Compatibility**: see PHASE13.md §13.9 (default bind, Host names behind proxies, token re-validation, stricter inputs).
 
+## Phase 14 — Linux Deployment, Upgrade & Release Readiness
+
+Guide: [docs/install.md](docs/install.md) · design, platform matrix, release checklist, honest limits: [docs/PHASE14.md](docs/PHASE14.md). Status: **Implemented — Verification Pending**. **Nothing here has run on Linux, systemd, `ufw`, Docker or GitHub Actions.**
+
+- **`deploy/`**: a hardened systemd unit (enforcing, `sudo ufw` only) and a monitor-only drop-in with no privilege at all; `install.sh` / `upgrade.sh` (both `--dry-run`, never overwrite, never download, never touch `ufw`; upgrade takes a *verified* backup first and never restores a database by itself); `release.sh` (unsigned `linux/amd64`+`arm64`, checksums, build manifest).
+- **`vanguard doctor`** (read-only host/install/upgrade diagnostics: permissions, secret presence without printing it, schema compatibility, backups, `ufw status` opt-in, health probe) and **`vanguard version`**.
+- **Found and fixed**: the old unit's `ProtectSystem=strict` very likely prevented `ufw` from saving rules; new databases were created world-readable (now 0600); the install guide asked for Go 1.21 (needs 1.25) and routinely `rm -rf`'d the data directory.
+- **CI** rewritten (static, Go from `go.mod` vs `stable`, Windows, race, frontend, lab, release check, advisory `govulncheck`) with a `gate` job that fails unless every required job is exactly `success` — a skipped, cancelled or *blocked* lab can never look green. Never executed.
+- **Not claimed**: reproducible or signed releases, an SBOM, or any Linux verification.
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.

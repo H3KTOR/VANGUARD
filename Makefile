@@ -5,7 +5,9 @@ FRONTEND_DIR := $(CORE_DIR)/frontend
 TOOLKIT_DIR := $(ROOT_DIR)toolkit
 BIN := $(CORE_DIR)/vanguard
 
-.PHONY: build build-frontend build-go run-simulate-ssh test vet fmt clean toolkit-install
+VERSION ?= $(shell git -C $(ROOT_DIR) describe --tags --always --dirty 2>/dev/null || echo dev)
+
+.PHONY: build build-frontend build-go run-simulate-ssh test vet fmt clean toolkit-install check-deploy release
 
 ## build: Build the React dashboard, then compile the VANGUARD core binary (stripped, for size) with it embedded.
 build: build-frontend build-go
@@ -17,7 +19,7 @@ build-frontend:
 
 ## build-go: Compile the VANGUARD core binary only (assumes core/cmd/vanguard/dist is already up to date).
 build-go:
-	cd $(CORE_DIR) && go build -ldflags="-s -w" -o vanguard ./cmd/vanguard
+	cd $(CORE_DIR) && go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o vanguard ./cmd/vanguard
 
 ## toolkit-install: Install Python toolkit dependencies.
 toolkit-install:
@@ -38,6 +40,14 @@ vet:
 ## fmt: Format all Go source files.
 fmt:
 	cd $(CORE_DIR) && gofmt -w .
+
+## check-deploy: Syntax-check the deployment scripts (bash -n). Does not prove they work on a real host.
+check-deploy:
+	for f in deploy/*.sh; do bash -n $$f || exit 1; done
+
+## release: Build unsigned local release artifacts into dist/ (needs the dashboard built; see deploy/release.sh).
+release: build-frontend
+	bash deploy/release.sh --version $(VERSION)
 
 ## clean: Remove build artifacts and local dev databases.
 clean:

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"vanguard/core/internal/firewall"
@@ -72,4 +74,29 @@ func bindWarning(addr string) string {
 		return "the dashboard/API is listening on a host name (" + host + "); traffic is plain HTTP"
 	}
 	return ""
+}
+
+// validateStartupPaths fails fast, with a clear message, on file-system
+// settings that would otherwise surface later as an obscure SQLite error.
+// It does not create or change anything.
+func validateStartupPaths(cfg *serveConfig) error {
+	if cfg.DBPath == "" || cfg.DBPath == ":memory:" {
+		return nil
+	}
+	if strings.ContainsAny(cfg.DBPath, "?#\x00") {
+		return fmt.Errorf("-db %q contains a character that is not allowed in a database path", cfg.DBPath)
+	}
+	dir := filepath.Dir(cfg.DBPath)
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return fmt.Errorf("the database directory %q does not exist; create it (owned by the service account, mode 0700) or fix -db", dir)
+	}
+	if st, err := os.Stat(cfg.DBPath); err == nil && st.IsDir() {
+		return fmt.Errorf("-db %q is a directory, not a database file", cfg.DBPath)
+	}
+	if cfg.BackupDir != "" {
+		if st, err := os.Stat(cfg.BackupDir); err == nil && !st.IsDir() {
+			return fmt.Errorf("-backup-dir %q exists and is not a directory", cfg.BackupDir)
+		}
+	}
+	return nil
 }

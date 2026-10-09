@@ -622,3 +622,27 @@ func List(root string) ([]Entry, error) {
 	}
 	return out, nil
 }
+
+// InspectLive is Inspect for a database that another process (the running
+// daemon) may be using: it opens read-only WITHOUT the immutable flag, so the
+// write-ahead log is honoured and the numbers describe the current state. It
+// never writes to the database or its schema. If the file's directory is not
+// writable the sidecar index may be unavailable and the call can fail; callers
+// report that as "could not inspect", not as a problem with the database.
+func InspectLive(path string) (*DBInfo, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	uri := "file:" + filepath.ToSlash(abs) + "?mode=ro"
+	if len(abs) > 1 && abs[1] == ':' {
+		uri = "file:/" + filepath.ToSlash(abs) + "?mode=ro"
+	}
+	d, err := sql.Open("sqlite", uri)
+	if err != nil {
+		return nil, err
+	}
+	defer closeQuiet(d)
+	d.SetMaxOpenConns(1)
+	return inspectOpen(d)
+}

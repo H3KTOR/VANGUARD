@@ -65,3 +65,8 @@ toolkit/*.pdf
 core/cmd/vanguard/dist/*
 !core/cmd/vanguard/dist/.gitkeep
 
+
+# release artifacts built by deploy/release.sh
+/dist/
+/dist.tmp*/
+/dist.sums*

@@ -3,8 +3,10 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -87,11 +89,31 @@ type serveConfig struct {
 	TelegramChatID   string
 }
 
-// parseServeFlags parses `vanguard serve [flags]`. It never calls os.Exit
-// itself on bad input beyond what flag.ExitOnError already does, so callers
-// (and tests, if added later) get a predictable serveConfig back.
+// parseServeFlags parses `vanguard serve [flags]` for the real process: any
+// problem is reported on stderr and ends the process (exit 2; -h exits 0).
+// Tests use parseServeFlagsE, which returns the error instead.
 func parseServeFlags(args []string) serveConfig {
-	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	cfg, err := parseServeFlagsE(args, os.Stderr)
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			os.Exit(0)
+		}
+		var fe flagParseError
+		if !errors.As(err, &fe) { // flag errors were already printed by the flag package
+			fmt.Fprintf(os.Stderr, "vanguard serve: %v\n", err)
+		}
+		os.Exit(2)
+	}
+	return cfg
+}
+
+// flagParseError marks an error the flag package has already reported.
+type flagParseError struct{ error }
+
+// parseServeFlagsE is parseServeFlags without the process exits.
+func parseServeFlagsE(args []string, errOut io.Writer) (serveConfig, error) {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(errOut)
 
 	dbPath := fs.String("db", envOr("VANGUARD_DB_PATH", "vanguard.db"), "Path to the SQLite database file")
 	verbose := fs.Bool("verbose", false, "Enable verbose SQL logging (development only)")
@@ -150,20 +172,17 @@ func parseServeFlags(args []string) serveConfig {
 	watchedPackages := fs.String("watched-packages", envOr("VANGUARD_WATCHED_PACKAGES", ""), "Comma-separated security-sensitive package names (appended to defaults)")
 
 	if err := fs.Parse(args); err != nil {
-		os.Exit(1)
+		return serveConfig{}, flagParseError{err}
 	}
 
 	if *ingestQueue < 1 || *ingestQueue > 65536 {
-		fmt.Fprintln(os.Stderr, "vanguard serve: -ingest-queue must be between 1 and 65536")
-		os.Exit(2)
+		return serveConfig{}, errors.New("-ingest-queue must be between 1 and 65536")
 	}
 	if *queryLimit < 1 || *queryLimit > 32 {
-		fmt.Fprintln(os.Stderr, "vanguard serve: -query-limit must be between 1 and 32")
-		os.Exit(2)
+		return serveConfig{}, errors.New("-query-limit must be between 1 and 32")
 	}
 	if *queryTimeout < time.Second || *queryTimeout > 5*time.Minute {
-		fmt.Fprintln(os.Stderr, "vanguard serve: -query-timeout must be between 1s and 5m")
-		os.Exit(2)
+		return serveConfig{}, errors.New("-query-timeout must be between 1s and 5m")
 	}
 
 	// Telegram alert credentials are intentionally env-var only (no CLI
@@ -209,8 +228,10 @@ func parseServeFlags(args []string) serveConfig {
 	}
 
 	if err := validateSecurityConfig(&cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "vanguard serve: %v\n", err)
-		os.Exit(2)
+		return serveConfig{}, err
+	}
+	if err := validateStartupPaths(&cfg); err != nil {
+		return serveConfig{}, err
 	}
 
 	sp := hostsec.DefaultSystemPostureConfig()
@@ -246,7 +267,7 @@ func parseServeFlags(args []string) serveConfig {
 			"Set VANGUARD_JWT_SECRET for a stable production deployment.")
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 // generateEphemeralSecret produces a cryptographically random 32-byte

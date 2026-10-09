@@ -41,6 +41,7 @@ func Open(cfg Config) (*DB, error) {
 	if dsn == "" {
 		dsn = "vanguard.db"
 	}
+	prepareFile(dsn)
 
 	// Enable WAL mode + a busy timeout via DSN query params so concurrent
 	// readers (dashboard API) don't block the writer (log tailer / metric

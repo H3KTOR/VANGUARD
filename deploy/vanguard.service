@@ -1,0 +1,106 @@
+# /etc/systemd/system/vanguard.service
+#
+# VANGUARD systemd unit. Reference: docs/install.md, docs/PHASE14.md.
+#
+# STATUS: written and syntax-checked on Windows; NEVER loaded by a real systemd
+# or run against a real ufw. Verify it on a Linux host with
+#   systemd-analyze verify /etc/systemd/system/vanguard.service
+#   systemd-analyze security vanguard
+# and the checklist in docs/PHASE14.md before relying on it.
+#
+# Assumptions (created by deploy/install.sh, or by hand per docs/install.md):
+#   - an unprivileged system account `vanguard` (NOT root) owns /opt/vanguard
+#   - the binary is /usr/local/bin/vanguard (root-owned, mode 0755)
+#   - secrets live in /etc/vanguard/vanguard.env, mode 0600, owner vanguard
+#     (never in this file, which is world-readable)
+#   - the account can read the auth log (Debian/Ubuntu: group `adm`)
+#
+# Privilege model: the daemon runs unprivileged. The ONLY privileged action is
+# `sudo ufw`, allowed by a one-line sudoers rule for /usr/sbin/ufw. That is why
+# NoNewPrivileges must be false in this (enforcing) variant; for a monitor-only
+# install without any firewall enforcement use deploy/vanguard-monitor-only.conf,
+# which turns NoNewPrivileges on and removes -ufw.
+#
+# Installing this unit never changes ufw. Whether ufw is enabled is your choice.
+
+[Unit]
+Description=VANGUARD - local-first Linux IDS/IPS
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=vanguard
+Group=vanguard
+# Needed to read /var/log/auth.log on Debian/Ubuntu. Adjust for your distro.
+SupplementaryGroups=adm
+WorkingDirectory=/opt/vanguard
+
+# VANGUARD_JWT_SECRET (>= 32 chars), optional VANGUARD_ADMIN_IPS, VANGUARD_ALLOWED_HOSTS ...
+EnvironmentFile=/etc/vanguard/vanguard.env
+
+# Read-only host sanity check written to the journal. The leading "-" means a
+# failing check is logged but does NOT block startup (it has not been verified on
+# Linux yet); remove the "-" once you trust it to make failed checks block.
+ExecStartPre=-/usr/local/bin/vanguard doctor -db /opt/vanguard/data/vanguard.db -env-file /etc/vanguard/vanguard.env -http-addr 127.0.0.1:8080 -auth-log /var/log/auth.log
+
+# Listens on loopback only. For remote access put a TLS reverse proxy in front
+# (and add its public name to VANGUARD_ALLOWED_HOSTS) or use an SSH tunnel.
+ExecStart=/usr/local/bin/vanguard serve \
+    -db /opt/vanguard/data/vanguard.db \
+    -http-addr 127.0.0.1:8080 \
+    -auth-log /var/log/auth.log \
+    -honeypot=true \
+    -ufw \
+    -ufw-sudo \
+    -metrics-interval 30s \
+    -metrics-retention 168h \
+    -disk-path / \
+    -shutdown-timeout 15s
+
+# SIGTERM triggers the daemon's ordered shutdown (HTTP drain, queues drained
+# for <= 2 s, goroutines joined, database closed). Give it more time than
+# -shutdown-timeout.
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+KillSignal=SIGTERM
+
+# --- Hardening ----------------------------------------------------------------
+# Required by the `sudo ufw` path (sudo is setuid). See the header comment.
+NoNewPrivileges=false
+
+ProtectSystem=strict
+# /opt/vanguard/data: database, backups.
+# The ufw paths: `sudo ufw` runs INSIDE this unit's mount namespace, so with
+# ProtectSystem=strict it could not persist rules unless these are writable.
+# The leading "-" ignores a path that does not exist on this distro. This list
+# is the usual Debian/Ubuntu set and is UNVERIFIED; if bans fail with
+# "Read-only file system", check `journalctl -u vanguard` and extend it.
+ReadWritePaths=/opt/vanguard/data -/etc/ufw -/lib/ufw -/var/lib/ufw -/run/xtables.lock
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+# Files the daemon creates (database, backups, sidecars) are private to it.
+UMask=0077
+
+# Resource ceilings (catch runaway behaviour; tune per host).
+MemoryMax=512M
+CPUQuota=100%
+TasksMax=256
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target
