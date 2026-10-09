@@ -70,7 +70,7 @@ Round trip incl. incidents, events, notes + authorship, operator-disabled IOC, t
 4. **Restore for real**: stop the daemon → preview `vanguard backup restore -name N` → read the plan (live vs backup row counts, warnings) → `... -confirm` → start the daemon.
 5. **After a failed upgrade**: stop, roll the binary back, restore the pre-upgrade backup (step 4).
 6. **Incompatible backup**: refused with the unknown tables/columns listed → use a build at least as new as the one that wrote it.
-7. **Verify after recovery**: dashboard incident/IOC counts match the preview; `GET /api/health/runtime` healthy; `backup_audits` (Settings) shows the restore with actor and the preserved previous DB name; log in (or create an admin if the backup excluded users); active bans re-appear at the firewall after startup reconcile; re-enter any Panic Mode you need.
+7. **Verify after recovery**: dashboard incident/IOC counts match the preview; `GET /api/health/runtime` healthy; `GET /api/backup` (`recent_activity`) shows the restore with actor and the preserved previous DB name (the panel itself does not display the audit list); log in (or create an admin if the backup excluded users); active bans re-appear at the firewall after startup reconcile; re-enter any Panic Mode you need.
 8. **Cleanup**: delete `*.pre-restore-*` files yourself when satisfied — VANGUARD never does.
 
 What the checks mean: SHA-256 + size → file unchanged since creation; `integrity_check` → SQLite structure is sound; row counts → manifest matches content; compatibility → this build can read it. None of them says *who* made it or that its content is trustworthy.
