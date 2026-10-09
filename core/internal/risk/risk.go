@@ -180,6 +180,14 @@ type Input struct {
 	// trigger. EscalationBonus is added on top of everything else.
 	Escalate       bool
 	EscalationNote string
+
+	// ContextAdjust is a signed, graded contextual adjustment (Phase 4
+	// System Posture detectors): positive for aggravating context (an
+	// all-interface listener, a package downgrade), negative for
+	// mitigating context (loopback-only listener, routine package
+	// update). It is folded into EscalationBonus so the Breakdown shape
+	// is unchanged, and the final total is still clamped to 0-100.
+	ContextAdjust int
 }
 
 // IncidentTypeOrRaw lets callers score either a real database.IncidentType
@@ -225,6 +233,8 @@ func Score(in Input) Breakdown {
 	if in.Escalate {
 		esc = 25
 	}
+
+	esc += in.ContextAdjust
 
 	total := clamp(base + freq + rep + esc)
 

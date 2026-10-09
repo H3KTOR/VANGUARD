@@ -606,11 +606,11 @@ const (
 	// Drift scan after VANGUARD starts, every socket observed is
 	// silently seeded into the baseline (exactly like every other
 	// hostsec scanner's isFirstScan/markSeeded cold-start pattern) --
-	// this constant exists purely to document the grace-period
-	// CONCEPT for operators/tests; the actual mechanism is the shared
-	// first-scan marker, not a separate timer, so a slow-starting
-	// service is never missed by a race against a wall-clock window.
-	ListeningServiceGracePeriod = 0
+	// this is the ADDITIONAL window after process start during which
+	// new/removed listeners are silently absorbed into the baseline
+	// (a slow-starting service coming up right after VANGUARD itself).
+	// Configurable via listening.GracePeriod.
+	ListeningServiceGracePeriod = 60 * time.Second
 
 	// PrivilegedPortThreshold: a listening port at or below this value
 	// is considered "privileged" (historically required root to bind)
@@ -726,3 +726,31 @@ var DefaultWatchedSecurityPackages = []string{
 	"libssl3",
 	"libssl1.1",
 }
+
+// DefaultHighRiskPackagePatterns are path.Match-style glob patterns for
+// dpkg package names whose fresh INSTALLATION is weighted higher by
+// Package Drift (offensive/dual-use tooling that has no business being
+// newly installed on a production server). Deliberately tiny -- a
+// pattern list, not a distro-specific package catalogue.
+var DefaultHighRiskPackagePatterns = []string{
+	"nmap", "ncat", "netcat*", "hydra", "john", "socat", "tcpdump",
+}
+
+const (
+	// Phase 4 hard state bounds. Every collection a Phase 4 detector
+	// holds or persists is capped by one of these so no attacker- or
+	// environment-controlled input can grow memory or database usage
+	// without limit.
+	MaxConfigDriftResources = 256
+	MaxListeningSockets     = 2048
+	MaxPackages             = 20000
+	// MaxProcPIDsScanned bounds the /proc/<pid>/fd walk used to resolve
+	// a listening socket's owning process.
+	MaxProcPIDsScanned = 8192
+	// MaxPackageStatusBytes bounds how much of /var/lib/dpkg/status is
+	// ever read.
+	MaxPackageStatusBytes = 64 * 1024 * 1024
+	// MinPhase4ScanInterval is the floor enforced on an operator-supplied
+	// scan interval so a typo cannot turn a scanner into a busy loop.
+	MinPhase4ScanInterval = 1 * time.Second
+)

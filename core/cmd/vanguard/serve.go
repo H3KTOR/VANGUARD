@@ -140,10 +140,11 @@ func buildApp(cfg serveConfig) (*app, error) {
 	// every finding flows into the exact same Incident/risk pipeline as
 	// every log-driven rule. ---
 	hostsecMgr := hostsec.NewManager(db, engine, hostsec.Config{
-		FIMPaths:    cfg.FIMPaths,
-		SUIDRoots:   cfg.SUIDScanRoots,
-		BinaryPaths: cfg.BinaryPaths,
-		Enabled:     cfg.EnableHostSecurity,
+		FIMPaths:      cfg.FIMPaths,
+		SUIDRoots:     cfg.SUIDScanRoots,
+		BinaryPaths:   cfg.BinaryPaths,
+		SystemPosture: cfg.SystemPosture,
+		Enabled:       cfg.EnableHostSecurity,
 	})
 
 	// --- 6. Auth manager + REST API. ---

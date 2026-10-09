@@ -587,16 +587,18 @@ const (
 	// limit). See hostsec/config_drift.go.
 	BaselineConfigDrift HostBaselineCategory = "config_drift"
 
-	// BaselineListeningService: Category=listening_service, Key=a stable
-	// normalized socket identity ("<protocol>:<address>:<port>", e.g.
-	// "tcp:0.0.0.0:22" or "tcp6:[::]:22" -- deliberately NOT merged
-	// across address families, see hostsec/listening.go's normalization
-	// doc comment). One row per observed listening socket.
+	// BaselineListeningService: Category=listening_service, a single
+	// atomic snapshot row (Key="snapshot") holding the whole bounded
+	// listening-socket inventory keyed by a stable normalized identity
+	// ("<protocol>:<address>:<port>", e.g. "tcp:0.0.0.0:22" or
+	// "tcp6:[::]:22" -- deliberately NOT merged across address
+	// families, see hostsec/listening.go's normalization doc comment).
+	// One row (not one per socket) so a baseline update is atomic.
 	BaselineListeningService HostBaselineCategory = "listening_service"
 
-	// BaselinePackage: Category=package, Key="<name>:<architecture>".
-	// One row per installed package identity. See
-	// hostsec/package_drift.go.
+	// BaselinePackage: Category=package, a single atomic snapshot row
+	// (Key="snapshot") holding the bounded dpkg inventory keyed by
+	// "<name>:<architecture>". See hostsec/package_drift.go.
 	BaselinePackage HostBaselineCategory = "package"
 )
 

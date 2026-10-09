@@ -38,19 +38,68 @@ type Config struct {
 	// hash the entire filesystem by default" constraint.
 	BinaryPaths []string
 
+	// SystemPosture configures the four Phase 4 System Posture detectors
+	// (Configuration Posture, Configuration Drift, Listening Service
+	// Drift, Package Drift). Its zero value leaves them all disabled.
+	SystemPosture SystemPostureConfig
+
 	// Enabled toggles the whole Host Security subsystem. Defaults to
 	// true; operators on a non-Linux dev sandbox or a container without
 	// access to /etc, /proc etc. can disable it entirely.
 	Enabled bool
 }
 
+// SystemPostureConfig groups the Phase 4 detector configurations and
+// their scan cadence.
+type SystemPostureConfig struct {
+	Enabled bool
+
+	Posture  PostureConfig
+	Drift    ConfigDriftConfig
+	Listen   ListeningConfig
+	Packages PackageConfig
+
+	EnablePosture, EnableDrift, EnableListening, EnablePackages bool
+
+	// ScanInterval, when >0, overrides every Phase 4 detector's default
+	// interval (floored at thresholds.MinPhase4ScanInterval). 0 keeps
+	// the per-detector defaults from internal/thresholds.
+	ScanInterval time.Duration
+}
+
+// DefaultSystemPostureConfig enables all four detectors with defaults.
+func DefaultSystemPostureConfig() SystemPostureConfig {
+	posture := DefaultPostureConfig()
+	posture.Paths = thresholds.DefaultConfigPosturePaths
+	posture.ExpectedOwners = thresholds.DefaultConfigPostureExpectedOwners
+	return SystemPostureConfig{
+		Enabled: true, EnablePosture: true, EnableDrift: true, EnableListening: true, EnablePackages: true,
+		Posture:  posture,
+		Drift:    DefaultConfigDriftConfig(),
+		Listen:   DefaultListeningConfig(),
+		Packages: DefaultPackageConfig(),
+	}
+}
+
+// interval resolves a detector's effective scan interval.
+func (c SystemPostureConfig) interval(def time.Duration) time.Duration {
+	if c.ScanInterval <= 0 {
+		return def
+	}
+	if c.ScanInterval < thresholds.MinPhase4ScanInterval {
+		return thresholds.MinPhase4ScanInterval
+	}
+	return c.ScanInterval
+}
+
 // DefaultConfig returns the out-of-the-box scan target lists.
 func DefaultConfig() Config {
 	return Config{
-		FIMPaths:    thresholds.DefaultFIMPaths,
-		SUIDRoots:   thresholds.DefaultSUIDScanRoots,
-		BinaryPaths: thresholds.DefaultSystemBinaryPaths,
-		Enabled:     true,
+		FIMPaths:      thresholds.DefaultFIMPaths,
+		SUIDRoots:     thresholds.DefaultSUIDScanRoots,
+		BinaryPaths:   thresholds.DefaultSystemBinaryPaths,
+		SystemPosture: DefaultSystemPostureConfig(),
+		Enabled:       true,
 	}
 }
 
@@ -66,6 +115,12 @@ type Manager struct {
 	suid        *SUIDMonitor
 	process     *ProcessDetector        // Phase 2, Feature 6
 	binaries    *BinaryIntegrityWatcher // Phase 2, Feature 8
+
+	// Phase 4 System Posture (nil when disabled).
+	posture   *PostureDetector
+	drift     *ConfigDriftDetector
+	listening *ListeningDetector
+	packages  *PackageDetector
 }
 
 // NewManager constructs every scanner, wiring reporter as the sink for
@@ -90,7 +145,7 @@ func NewManager(db *database.DB, reporter Reporter, cfg Config) *Manager {
 		binaryPaths = thresholds.DefaultSystemBinaryPaths
 	}
 
-	return &Manager{
+	m := &Manager{
 		cfg:         cfg,
 		fim:         NewFIMWatcher(db, reporter, fimPaths),
 		persistence: NewPersistenceDetector(db, reporter),
@@ -100,6 +155,21 @@ func NewManager(db *database.DB, reporter Reporter, cfg Config) *Manager {
 		process:     NewProcessDetector(db, reporter),
 		binaries:    NewBinaryIntegrityWatcher(db, reporter, binaryPaths),
 	}
+	if sp := cfg.SystemPosture; sp.Enabled {
+		if sp.EnablePosture {
+			m.posture = NewPostureDetector(db, reporter, sp.Posture)
+		}
+		if sp.EnableDrift {
+			m.drift = NewConfigDriftDetector(db, reporter, sp.Drift)
+		}
+		if sp.EnableListening {
+			m.listening = NewListeningDetector(db, reporter, sp.Listen)
+		}
+		if sp.EnablePackages {
+			m.packages = NewPackageDetector(db, reporter, sp.Packages)
+		}
+	}
+	return m
 }
 
 // Run starts every scanner on its own ticker and blocks until ctx is
@@ -141,6 +211,35 @@ func (m *Manager) Run(ctx context.Context) {
 		{"suid", thresholds.SUIDScanInterval, m.suid.Scan},
 		{"process", thresholds.ProcessScanInterval, m.process.Scan},
 		{"binary_integrity", thresholds.BinaryIntegrityScanInterval, m.binaries.Scan},
+	}
+	sp := m.cfg.SystemPosture
+	if m.posture != nil {
+		scanners = append(scanners, struct {
+			name     string
+			interval time.Duration
+			scan     func(context.Context)
+		}{"config_posture", sp.interval(thresholds.ConfigPostureScanInterval), m.posture.Scan})
+	}
+	if m.drift != nil {
+		scanners = append(scanners, struct {
+			name     string
+			interval time.Duration
+			scan     func(context.Context)
+		}{"config_drift", sp.interval(thresholds.ConfigDriftScanInterval), m.drift.Scan})
+	}
+	if m.listening != nil {
+		scanners = append(scanners, struct {
+			name     string
+			interval time.Duration
+			scan     func(context.Context)
+		}{"listening", sp.interval(thresholds.ListeningServiceScanInterval), m.listening.Scan})
+	}
+	if m.packages != nil {
+		scanners = append(scanners, struct {
+			name     string
+			interval time.Duration
+			scan     func(context.Context)
+		}{"package_drift", sp.interval(thresholds.PackageDriftScanInterval), m.packages.Scan})
 	}
 	for _, s := range scanners {
 		wg.Add(1)

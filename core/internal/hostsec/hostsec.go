@@ -37,7 +37,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	"vanguard/core/internal/database"
@@ -83,6 +82,14 @@ type Finding struct {
 	// by Feature 7's correlateHostFinding to check each address against
 	// Threat Intelligence. Empty for every other scanner.
 	RemoteAddrs []string
+
+	// RiskAdjust is a signed contextual adjustment applied on top of the
+	// incident type's base severity (Phase 4: e.g. a loopback-only
+	// listener is -15, an all-interface listener on a privileged port is
+	// +25). Zero for every Phase 1-3 scanner. Unlike Critical it never
+	// implies a fixed +25 escalation, letting a detector express graded
+	// context rather than a binary "escalate / don't".
+	RiskAdjust int
 
 	// Details carries every other scanner-specific field (previous/
 	// current hash, mode, uid/gid, matched line, etc) for the incident's
@@ -164,9 +171,9 @@ func statFile(path string) (fileMeta, error) {
 		return fileMeta{}, err
 	}
 	m := fileMeta{Exists: true, Size: info.Size(), Mode: info.Mode().String()}
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		m.UID = st.Uid
-		m.GID = st.Gid
+	if uid, gid, ok := ownerOf(info); ok {
+		m.UID = uid
+		m.GID = gid
 	}
 	if info.Mode().IsRegular() {
 		if h, err := hashFile(path); err == nil {

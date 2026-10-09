@@ -68,6 +68,7 @@ func (e *Engine) ReportHostFinding(f hostsec.Finding) {
 		ThreatIntelHit:      false, // host-local findings have no IP to check against threat intel
 		Escalate:            f.Critical,
 		EscalationNote:      f.EscalationNote,
+		ContextAdjust:       f.RiskAdjust,
 	})
 
 	ev := &Event{

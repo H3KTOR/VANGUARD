@@ -54,7 +54,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"syscall"
 	"time"
 
 	"vanguard/core/internal/database"
@@ -260,11 +259,11 @@ func (d *PostureDetector) checkOwnership(p string) {
 		logf("posture", "failed to stat %s for ownership check: %v", p, err)
 		return
 	}
-	st, ok := info.Sys().(*syscall.Stat_t)
+	uid, gid, ok := ownerOf(info)
 	if !ok {
 		return
 	}
-	observed := fmt.Sprintf("%d:%d", st.Uid, st.Gid)
+	observed := fmt.Sprintf("%d:%d", uid, gid)
 	if observed == expected {
 		d.clearResult(key)
 		return

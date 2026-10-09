@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"vanguard/core/internal/hostsec"
 	"vanguard/core/internal/thresholds"
 )
 
@@ -58,6 +60,10 @@ type serveConfig struct {
 	// security-critical executables) with independent defaults.
 	BinaryPaths []string
 
+	// SystemPosture (Mega Expansion, Phase 4): Configuration Posture,
+	// Configuration Drift, Listening Service Drift, Package Drift.
+	SystemPosture hostsec.SystemPostureConfig
+
 	// TelegramBotToken / TelegramChatID enable real-time push alerts when
 	// Autopilot bans an IP. Both env-var only (never a CLI flag) since
 	// they're secrets that would otherwise be visible via `ps`. Either
@@ -105,6 +111,19 @@ func parseServeFlags(args []string) serveConfig {
 	suidRoots := fs.String("suid-roots", envOr("VANGUARD_SUID_ROOTS", ""), "Comma-separated list of additional directories to scan for SUID/SGID binaries (appended to the built-in defaults)")
 	binaryPaths := fs.String("binary-paths", envOr("VANGUARD_BINARY_PATHS", ""), "Comma-separated list of additional security-critical binaries for System Binary Integrity monitoring (appended to the built-in defaults)")
 
+	systemPosture := fs.Bool("system-posture", true, "Enable Phase 4 System Posture detectors (configuration posture/drift, listening-service drift, package drift)")
+	postureInterval := fs.Duration("posture-interval", envDuration("VANGUARD_POSTURE_INTERVAL"), "Override the scan interval of every Phase 4 detector (0 = per-detector defaults; minimum 1s)")
+	posturePaths := fs.String("posture-paths", envOr("VANGUARD_POSTURE_PATHS", ""), "Comma-separated extra absolute paths for Configuration Posture (world-writable check)")
+	driftPaths := fs.String("drift-paths", envOr("VANGUARD_DRIFT_PATHS", ""), "Comma-separated extra absolute paths for Configuration Drift")
+	driftHashLimit := fs.Int64("drift-hash-limit", thresholds.ConfigDriftMaxHashBytes, "Max file size in bytes that Configuration Drift will hash (larger files are compared by metadata only)")
+	driftFirstObs := fs.Bool("drift-report-first-observation", false, "Report a pre-existing monitored resource seen for the first time as drift instead of silently baselining it")
+	expectedListeners := fs.String("expected-listeners", envOr("VANGUARD_EXPECTED_LISTENERS", ""), "Comma-separated allowed listeners as proto/addr/port[/process], e.g. tcp/0.0.0.0/22/sshd (proto and addr accept *)")
+	ignoredListeners := fs.String("ignored-listeners", envOr("VANGUARD_IGNORED_LISTENERS", ""), "Comma-separated listeners excluded from Listening Service Drift (same format as -expected-listeners)")
+	listenGrace := fs.Duration("listening-grace", thresholds.ListeningServiceGracePeriod, "Startup window during which listener changes are silently absorbed into the baseline")
+	resolveProcs := fs.Bool("listening-resolve-processes", true, "Best-effort resolve the owning process name of listening sockets via /proc")
+	ignoredPackages := fs.String("ignored-packages", envOr("VANGUARD_IGNORED_PACKAGES", ""), "Comma-separated package names Package Drift ignores (appended to defaults)")
+	watchedPackages := fs.String("watched-packages", envOr("VANGUARD_WATCHED_PACKAGES", ""), "Comma-separated security-sensitive package names (appended to defaults)")
+
 	if err := fs.Parse(args); err != nil {
 		os.Exit(1)
 	}
@@ -143,6 +162,29 @@ func parseServeFlags(args []string) serveConfig {
 		BinaryPaths:        append(append([]string{}, thresholds.DefaultSystemBinaryPaths...), splitAndTrim(*binaryPaths)...),
 	}
 
+	sp := hostsec.DefaultSystemPostureConfig()
+	sp.Enabled = *systemPosture
+	if *postureInterval < 0 {
+		log.Printf("[serve] WARNING: negative -posture-interval %s ignored, using per-detector defaults", *postureInterval)
+	} else {
+		sp.ScanInterval = *postureInterval
+	}
+	sp.Posture.Paths = append(append([]string{}, sp.Posture.Paths...), splitAndTrim(*posturePaths)...)
+	sp.Drift.Paths = append(append([]string{}, sp.Drift.Paths...), splitAndTrim(*driftPaths)...)
+	if *driftHashLimit > 0 {
+		sp.Drift.MaxHashBytes = *driftHashLimit
+	}
+	sp.Drift.ReportFirstObservation = *driftFirstObs
+	sp.Listen.Expected = append(append([]thresholds.ExpectedListener{}, sp.Listen.Expected...), parseListenerSpecs(*expectedListeners)...)
+	sp.Listen.Ignored = parseListenerSpecs(*ignoredListeners)
+	if *listenGrace >= 0 {
+		sp.Listen.GracePeriod = *listenGrace
+	}
+	sp.Listen.ResolveProcesses = *resolveProcs
+	sp.Packages.Ignored = append(append([]string{}, sp.Packages.Ignored...), splitAndTrim(*ignoredPackages)...)
+	sp.Packages.Watched = append(append([]string{}, sp.Packages.Watched...), splitAndTrim(*watchedPackages)...)
+	cfg.SystemPosture = sp
+
 	if cfg.JWTSecret == "" {
 		cfg.JWTSecret = generateEphemeralSecret()
 		log.Println("[serve] WARNING: no -jwt-secret / VANGUARD_JWT_SECRET provided. Generated a random, " +
@@ -163,6 +205,52 @@ func generateEphemeralSecret() string {
 		panic(fmt.Sprintf("vanguard: failed to generate ephemeral JWT secret: %v", err))
 	}
 	return hex.EncodeToString(buf)
+}
+
+// envDuration parses a duration env var; unset or invalid yields 0
+// (per-detector defaults), with the invalid case logged.
+func envDuration(key string) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		log.Printf("[serve] WARNING: invalid %s=%q ignored", key, v)
+		return 0
+	}
+	return d
+}
+
+// parseListenerSpecs parses "proto/addr/port[/process]" entries. Invalid
+// entries are logged and skipped -- for an allowlist, skipping errs on
+// the side of MORE alerts, never fewer.
+func parseListenerSpecs(csv string) []thresholds.ExpectedListener {
+	var out []thresholds.ExpectedListener
+	for _, raw := range splitAndTrim(csv) {
+		parts := strings.Split(raw, "/")
+		if len(parts) < 3 || len(parts) > 4 {
+			log.Printf("[serve] WARNING: invalid listener spec %q (want proto/addr/port[/process]), skipped", raw)
+			continue
+		}
+		switch parts[0] {
+		case "*", "tcp", "tcp6", "udp", "udp6":
+		default:
+			log.Printf("[serve] WARNING: invalid listener protocol in %q, skipped", raw)
+			continue
+		}
+		port, err := strconv.Atoi(parts[2])
+		if err != nil || port < 1 || port > 65535 || parts[1] == "" {
+			log.Printf("[serve] WARNING: invalid listener address/port in %q, skipped", raw)
+			continue
+		}
+		l := thresholds.ExpectedListener{Protocol: parts[0], AddressPattern: parts[1], Port: port}
+		if len(parts) == 4 {
+			l.ProcessNameHint = parts[3]
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 func envOr(key, fallback string) string {
