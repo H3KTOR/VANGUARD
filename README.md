@@ -182,6 +182,18 @@ Design, results and Definition of Done: [docs/PHASE7.md](docs/PHASE7.md). Status
 - **Analyst notes** (authenticated author only, audited, soft-deleted) are kept apart from detector evidence and never affect risk or response. **Export** (`/export`) is a bounded, secret-masked JSON of one incident — not signed or tamper-evident.
 - **Also fixed**: the "unexplained" test failures from earlier phases were test-environment assumptions (UTC-formatted syslog times vs. a local-time parser; a Windows RST in a honeypot test client) — see `150cc5a`. Unix-permission tests now *skip* off Linux instead of failing.
 
+## Phase 8 — Security Validation & Purple-Team Readiness
+
+Capability-to-test matrix, environment, failure classification and Definition of Done: [docs/PHASE8.md](docs/PHASE8.md); first generated report: [docs/reports/](docs/reports/). Status: **Implemented — Verification Pending**. This phase measures what has evidence behind it; it does not certify VANGUARD.
+
+- **Matrix**: every detector/safeguard is mapped to its positive test, benign/boundary control, lab scenario and an explicit state (`Tested` = automated test passed on Windows; `Lab-written` = script exists, never run; `Verified on Linux` = none yet). A unit test, an executed lab scenario and a Linux run are never merged into one claim.
+- **Real defect found and fixed**: concurrent incidents for one actor each created a ban (unsynchronized check-then-act). Now serialized per address.
+- **Earlier "unexplained" failures root-caused**: UTC-formatted syslog test helpers vs a local-time parser (10 tests), a Windows RST in a honeypot test client, and Unix-permission tests that now skip off Linux.
+- **Lab runner** `lab/run-all.sh`: prerequisite checks, independent per-suite judgement, `summary.json`, exit `0` pass / `1` fail / `3` blocked (a blocked or skipped suite is never a pass). Only its blocked path has been exercised (no Docker here).
+- **Report tool** `core/tools/valreport` builds a report from real `go test -json` / lab output only, with baseline comparison and an explicit "not run" list; it produces no coverage or accuracy percentages.
+- **CI** (`.github/workflows/ci.yml`): static, test, race, frontend, lab and report jobs — written, **not yet executed**.
+- **Still unverified**: all Docker lab suites, `go test -race`, Linux-only tests, real `ufw`, the declared Go 1.25 minimum.
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.
