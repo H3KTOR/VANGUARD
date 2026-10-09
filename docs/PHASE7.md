@@ -32,13 +32,13 @@ States: `not started` < `in progress` < `implemented` < `tested` < `verified (ta
 
 | # | Milestone | Acceptance criteria | State |
 |---|---|---|---|
-| 1 | Shared redaction + notes model | `internal/redact` (keys + free text + PEM); notes CRUD with auth/limits/audit events | not started |
-| 2 | Timeline + data gaps | deterministic order, tie-break, pagination bounds, legacy incidents, no fabricated entries | not started |
-| 3 | Relationship list | only explicit-reference edges, caps, no proximity edges | not started |
-| 4 | Investigation query | validated filters (400), parameterized, bounded, honest retention note | not started |
-| 5 | Export | redaction round-trip, size cap, deterministic | not started |
-| 6 | Dashboard | provenance/gaps/notes/export, empty + legacy safe, Vitest | not started |
-| 7 | Final verification + docs | honest status | not started |
+| 1 | Shared redaction + notes model | `internal/redact` (keys + free text + PEM); notes CRUD with auth/limits/audit events | tested |
+| 2 | Timeline + data gaps | deterministic order, tie-break, pagination bounds, legacy incidents, no fabricated entries | tested |
+| 3 | Relationship list | only explicit-reference edges, caps, no proximity edges | tested |
+| 4 | Investigation query | validated filters (400), parameterized, bounded, honest retention note | tested |
+| 5 | Export | redaction round-trip, size cap, deterministic | tested |
+| 6 | Dashboard | provenance/gaps/notes/export, empty + legacy safe, Vitest | tested (Vitest); investigation-query UI deferred |
+| 7 | Final verification + docs | honest status | partially done (see results) |
 
 ### Explicit non-goals
 
@@ -47,3 +47,63 @@ No raw-event retention; no attack-narrative generation; no cross-actor merging; 
 ### Outstanding verification (tracked separately; not changed by Phase 7)
 
 Docker lab scripts for Phases 4, 5, 6 never executed; `go test -race ./...` never run (no CGO here); 7 Unix-permission `hostsec` tests need Linux; real-`ufw` verification outstanding.
+
+## Results (Windows dev machine, Go 1.27; **no Linux, no Docker, no CGO**)
+
+### Delivered
+
+| Workstream | Delivered | Evidence |
+|---|---|---|
+| 7A Timeline | `GET /api/incidents/:id/timeline`: detection, indicator matches, audit events (status / response / verification / note), ban rules, notes; UTC, deterministic `(time, source rank, source, id)` order, provenance per entry, bounded pages (≤200), per-source caps disclosed, explicit `data_gaps` | `investigate_test.go` (ordering + same-instant ties + mixed time zones, pagination, no fabrication, legacy/empty metadata, correlated + host-local disclosures, cap disclosure, verification failure visible); API test |
+| 7B Relationships | Delivered as a **depth-1 relationship list** (`/graph`), not a visualization. Edges: `matched`, `matched_context`, `triggered_response`, `shares_indicator` (disclaims same-actor); every edge cites a stored record; 50-node and 10-per-indicator caps flagged via `truncated`. **Not possible and not claimed:** edges to the constituents of correlated incidents (not stored), actor/host identity edges, time-proximity edges | graph tests incl. same-IP-same-moment incident staying unlinked, duplicate references, fan-out bound |
+| 7C Queries | `GET /api/investigate/incidents`: id, rule, status, severity, risk range, since/until, ip, ioc_id, has_ioc_match, evidence_kind (closed type set, no JSON scan), response/verification outcome; default 30-day window echoed back; limit ≤200, offset ≤10 000; retention notes. Scanner failures are **not** queryable (history is not persisted) and this is stated | query tests + 21 invalid-filter API cases (400) |
+| 7D Notes | `incident_notes`: authenticated author only, 2 000 chars, 100 live/incident, control chars stripped, soft delete, create/edit/delete audited without text, never touches evidence/risk/status | notes test, API test |
+| 7E Export | `GET /api/incidents/:id/export`: `vanguard-investigation` v1, redacted nested metadata and note text (`internal/redact`), only the requested incident, 2 MiB cap with explicit truncation, deterministic, explicit not-signed disclaimer | round-trip, redaction, determinism, size-limit tests |
+| 7F Dashboard | Incident panel: provenance-labelled timeline, collapsible data gaps, related incidents (explicit references only), notes (rendered as text), export button, existing response status/plan kept | 6 new Vitest tests (18 in `IncidentEvidence.test.jsx`); `vite build` OK |
+| 7G Regression tests | Ordering, ties, time zones, missing fields, duplicate refs, unrelated incidents separate, bounds, invalid filters, nested-secret redaction, export limit, restart persistence, legacy DB without `incident_notes`, verification failure | see above |
+
+### Commands and actual results
+
+| Command | Result |
+|---|---|
+| `gofmt -l .` (core) | clean |
+| `GOOS=linux go vet ./...` | clean |
+| `go build ./...` | OK |
+| `go test ./...` (Windows) | **all 13 packages pass** (the earlier environment failures were root-caused and fixed in `150cc5a`; 10 `hostsec` tests *skip* on non-Unix and are not counted as passes) |
+| New Go tests this phase | 19 test functions (redact 5, investigate 12, api 2; many table-driven) |
+| `npx vitest run` | 4 files, 48 tests pass |
+| `npx vite build` | OK |
+
+### Defects found while building (fixed)
+
+- Graph fan-out cap was silent → now flagged `truncated`.
+- Redaction's per-value truncation was silent in exports → export now discloses it.
+- `firewall_rules.incident_id` was unindexed (timeline/graph lookups would scan) → indexed.
+
+### Limitations / deferred
+
+- No investigation-query UI (API only). No graph visualization (no relationships that justify one). No retained raw events, scanner-health history, or correlation constituents — each is disclosed per incident as a data gap.
+- Redaction is heuristic (key names + common secret shapes); exports are not signed or tamper-evident; notes are not tamper-evident.
+- Authentication: any authenticated analyst may add/edit/delete notes (authorship is recorded, not enforced per-owner).
+
+### Not verified (blockers, tracked separately)
+
+- `go test -race ./...` (no CGO); Linux execution of the 10 Unix-only `hostsec` tests; Docker lab scripts for Phases 4, 5, 6 (none run) — **no Phase 7 lab scenario was written** (Phase 7 behaviour is covered by API-level tests; a lab run adds nothing the unit/API tests do not, and none would be claimed); real-`ufw` verification.
+
+### Definition of Done
+
+| Item | State |
+|---|---|
+| Audit + baseline recorded (incl. root-caused failures) | done |
+| Timeline only defensible persisted data; provenance visible | done (tested) |
+| Queries bounded + parameterized; invalid → 400 | done (tested) |
+| Missing telemetry honest (data gaps, retention notes) | done (tested) |
+| Export bounded + redacted | done (tested) |
+| Notes distinct from evidence | done (tested) |
+| Dashboard tests | pass (48) |
+| gofmt / vet / build | pass |
+| Race tests | **blocked** (no CGO) |
+| Linux-specific behaviour / Docker scenarios | **unverified** |
+| Phase 4–6 gaps remain visible | yes |
+
+**Conclusion: Implemented — Verification Pending.**

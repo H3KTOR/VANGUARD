@@ -172,6 +172,16 @@ Plan, audit, results and Definition of Done: [docs/PHASE6.md](docs/PHASE6.md); f
 - **Deferred**: cross-actor / proximity-only IOC correlation and any attribution (shared infrastructure makes it unreliable).
 - **Not yet executed**: `lab/run-phase6.sh` (and the Phase 4/5 lab scripts), `go test -race ./...`.
 
+## Phase 7 — Investigation Intelligence
+
+Design, results and Definition of Done: [docs/PHASE7.md](docs/PHASE7.md). Status: **Implemented — Verification Pending** (no Linux/Docker/`-race` run).
+
+- **Unified timeline** per incident (`GET /api/incidents/:id/timeline`): detection, indicator matches, response/verification/lifecycle audit events, ban rules and analyst notes in a deterministic UTC order, each labelled *observed / derived / correlated / analyst / response*. A `data_gaps` list states what is *not* there (no raw events, no scanner-health history, no stored constituents of correlated incidents). An empty list means "nothing persisted", never "nothing happened".
+- **Relationships** (`/graph`): only edges backed by a stored reference (matched indicator, response rule, shared indicator). Time or address proximity never links incidents, and `shares_indicator` explicitly does not claim a common actor.
+- **Bounded queries** (`GET /api/investigate/incidents`): rule, status, severity, risk range, time range, IP, indicator, response/verification outcome, evidence kind; validated (400), parameterized, ≤200 per page, 30-day default window.
+- **Analyst notes** (authenticated author only, audited, soft-deleted) are kept apart from detector evidence and never affect risk or response. **Export** (`/export`) is a bounded, secret-masked JSON of one incident — not signed or tamper-evident.
+- **Also fixed**: the "unexplained" test failures from earlier phases were test-environment assumptions (UTC-formatted syslog times vs. a local-time parser; a Windows RST in a honeypot test client) — see `150cc5a`. Unix-permission tests now *skip* off Linux instead of failing.
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.
