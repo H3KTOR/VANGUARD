@@ -122,6 +122,7 @@ func parseServeFlags(args []string) serveConfig {
 	listenGrace := fs.Duration("listening-grace", thresholds.ListeningServiceGracePeriod, "Startup window during which listener changes are silently absorbed into the baseline")
 	resolveProcs := fs.Bool("listening-resolve-processes", true, "Best-effort resolve the owning process name of listening sockets via /proc")
 	ignoredPackages := fs.String("ignored-packages", envOr("VANGUARD_IGNORED_PACKAGES", ""), "Comma-separated package names Package Drift ignores (appended to defaults)")
+	dpkgStatus := fs.String("dpkg-status", envOr("VANGUARD_DPKG_STATUS", "/var/lib/dpkg/status"), "Path of the dpkg status database read by Package Drift (read-only; absent file disables the detector gracefully)")
 	watchedPackages := fs.String("watched-packages", envOr("VANGUARD_WATCHED_PACKAGES", ""), "Comma-separated security-sensitive package names (appended to defaults)")
 
 	if err := fs.Parse(args); err != nil {
@@ -183,6 +184,9 @@ func parseServeFlags(args []string) serveConfig {
 	sp.Listen.ResolveProcesses = *resolveProcs
 	sp.Packages.Ignored = append(append([]string{}, sp.Packages.Ignored...), splitAndTrim(*ignoredPackages)...)
 	sp.Packages.Watched = append(append([]string{}, sp.Packages.Watched...), splitAndTrim(*watchedPackages)...)
+	if strings.TrimSpace(*dpkgStatus) != "" {
+		sp.Packages.StatusPath = strings.TrimSpace(*dpkgStatus)
+	}
 	cfg.SystemPosture = sp
 
 	if cfg.JWTSecret == "" {

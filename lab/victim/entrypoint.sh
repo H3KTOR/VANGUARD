@@ -43,6 +43,18 @@ mkdir -p /run/sshd
 echo "[victim] starting nginx..."
 nginx
 
+# --- Phase 4 (System Posture & Drift) lab fixtures. Everything lives under
+# /etc/vanguard-lab and /var/lib/vanguard-lab INSIDE this throwaway
+# container: a posture/drift config pair for the scenarios to mutate, and
+# a COPY of the real dpkg status database (so Package Drift scenarios edit
+# metadata fixtures instead of installing real packages -- fast,
+# deterministic, and the base image is never damaged). Created only if
+# absent so a `docker restart` keeps the scenarios' state. ---
+mkdir -p /etc/vanguard-lab /var/lib/vanguard-lab
+[ -f /etc/vanguard-lab/posture.conf ] || { echo "lab posture fixture" > /etc/vanguard-lab/posture.conf; chmod 644 /etc/vanguard-lab/posture.conf; }
+[ -f /etc/vanguard-lab/drift.conf ] || { echo "lab drift fixture" > /etc/vanguard-lab/drift.conf; chmod 644 /etc/vanguard-lab/drift.conf; }
+[ -f /var/lib/vanguard-lab/dpkg-status ] || cp /var/lib/dpkg/status /var/lib/vanguard-lab/dpkg-status
+
 echo "[victim] starting VANGUARD Core..."
 exec /usr/local/bin/vanguard serve \
     -db=/data/vanguard.db \
@@ -51,4 +63,9 @@ exec /usr/local/bin/vanguard serve \
     -web-log=/var/log/nginx/access.log \
     -honeypot=true \
     -state-max-idle=10m \
-    -reap-interval=30s
+    -reap-interval=30s \
+    -posture-interval=3s \
+    -posture-paths=/etc/vanguard-lab/posture.conf \
+    -drift-paths=/etc/vanguard-lab/drift.conf \
+    -listening-grace=10s \
+    -dpkg-status=/var/lib/vanguard-lab/dpkg-status

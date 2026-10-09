@@ -8,7 +8,7 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 
 > **Deployment note**: VANGUARD is a traditional host-based Linux daemon (log tailing, raw sockets for the honeypot, direct UFW/iptables execution, an embedded static dashboard). It is **not** a Cloudflare Pages/Workers application — there is no serverless deployment story for this project. It is built, tested, and run directly in this sandbox (a Linux environment) and is intended to ultimately run as a systemd service on a real Linux host.
 
-## Current Status: Steps 1–5 + Attack Correlation Engine + Automated Security Test Lab + VANGUARD Mega Expansion Phase 1 (Host Security) + Phase 2 (Process/File/Network Correlation, System Binary Integrity) + Phase 3 (Advanced Web Security Detection) Complete
+## Current Status: Steps 1–5 + Attack Correlation Engine + Automated Security Test Lab + VANGUARD Mega Expansion Phase 1 (Host Security) + Phase 2 (Process/File/Network Correlation, System Binary Integrity) + Phase 3 (Advanced Web Security Detection) + Phase 4 (System Posture & Drift Detection) Complete (code + unit tests; Docker lab pending execution)
 
 ### ✅ Completed
 
@@ -105,13 +105,58 @@ Lightweight AI-Assisted Linux IDS/IPS & Security Monitoring Platform.
 - **Real bug found via genuine Docker E2E testing** (not just unit tests): the lab's own ordinary web-probing traffic (`/phpmyadmin/index.php`, part of Scenario A's routine recon) happened to match the single weakest Web Shell signal (a bare `.php` extension), and an earlier, unconditional feed-in briefly treated that routine probe as "Exploitation stage" evidence — occurring before the auth-probing stage even started, corrupting the chain's required ordering. Fixed by requiring `sig.count() >= 2` (at least 2 of the 3 independent signals) before a web-shell-shaped request counts as exploitation-stage chain evidence, without changing the standalone Web Shell Indicator incident's own lenient single-signal behavior. Locked in with a dedicated regression test (`TestWebAttackChain_SingleWeakSignalWebShellPath_DuringWebProbing_DoesNotPrematurelyFeedExploitStage`) independent of Docker.
 - **`lab/` extended** with 10 new attack scenarios (E through N) in `run-tests.sh` exercising all 9 Phase 3 detectors plus the Web Attack Chain end-to-end against the real VANGUARD binary — genuine `hydra`/`curl` traffic, not synthetic log injection — using calibrated volumes matched against the exact threshold constants (e.g. `AuthAbuseTracker` password-spraying/credential-stuffing shapes, `APIAbuseTracker`'s ≥20-distinct-path threshold answered with 50 requests for safety margin against cross-scenario window noise). Also added a custom nginx `log_format` (`lab/victim/nginx-vhost-log.conf`) appending the `Host` header as an optional trailing quoted field — matching `parser_web.go`'s already-optional 8th capture group — since the stock "combined" format never logs Host at all, which the Host Header Abuse scenario needs. **Verified end-to-end: 18/18 lab scenarios PASS** (`docker compose run --rm attacker ./run-tests.sh` against the rebuilt victim image), including the Web Attack Chain firing correctly (risk=100/CRITICAL) as a side effect of the web-probing + auth-probing + exploitation scenarios run in sequence.
 
+## Phase 4 — System Posture & Drift Detection
+
+Four detectors in `core/internal/hostsec`, all routed through `Engine.ReportHostFinding` → `createIncident()` (no new pipeline), all observation-only (no auto-remediation), all host-local incidents (`SourceIP=127.0.0.1`, always whitelisted so they can never self-ban).
+
+| Incident type | Detector | Question it answers |
+|---|---|---|
+| `configuration_posture` | `posture.go` | Is a monitored path **currently** unsafe? (world-writable, ownership ≠ explicit expectation, `PermitRootLogin yes` / `PermitEmptyPasswords yes`) |
+| `configuration_drift` | `config_drift.go` | Did a monitored resource **change** vs. its persisted baseline? (created / deleted / mode / uid / gid / content) |
+| `listening_service_drift` | `listening.go` | Did the set of **listening** sockets change? (new, removed, protocol/bind-address/port/process change) |
+| `package_drift` | `package_drift.go` | Did the dpkg inventory change? (installed, removed, upgraded, downgraded, state, architecture) |
+
+**Observed drift ≠ suspicious posture ≠ confirmed malicious activity.** A drift incident says "this changed"; a posture incident says "this is unsafe right now". Neither proves compromise — package updates and admin edits are the common cause.
+
+### Baseline semantics
+- **Persistence**: baselines live in the existing `host_file_baselines` table (new categories `config_posture`, `config_drift`, `listening_service`, `package`) — no new table/engine. Listening and package baselines are one atomic JSON snapshot row each; config drift is one row per resource. Baselines survive restarts and are never silently replaced: if the baseline store is unreadable/corrupt the scan skips instead of re-baselining.
+- **First observation** silently establishes the baseline (`-drift-report-first-observation` opts in to reporting it). A resource recorded as *absent* that later appears is `created`.
+- **Not drift**: mtime-only changes; established connections / transient socket states; the first package inventory; missing optional paths; anything in the ignored/expected lists.
+- **Dedup**: after a drift is reported the baseline advances, so the same state is reported once; a revert or further change is a new drift. Posture findings are suppressed while their observed/expected tuple is unchanged and re-reported after a fix-then-regress. The engine's `(subject, type)` cooldown is a second layer.
+- **Fail-safe**: unreadable `/proc/net` tables → scan aborted, never an "empty listener set"; missing/unparseable `/var/lib/dpkg/status` → detector idles (logged once), never "all packages removed"; unreadable monitored file ≠ deleted; hash failure → metadata-only comparison, recorded as `hash_skipped`.
+
+### Listening-service identity & normalization
+Identity is `<proto>:<addr>:<port>` — `tcp:0.0.0.0:22`, `tcp6:[::]:22`, `udp:127.0.0.1:53`. The protocol label carries the family and addresses are canonical `netip.Addr` strings, so **`0.0.0.0:22` and `[::]:22` are deliberately distinct**. Only TCP `LISTEN` and unconnected UDP sockets count. Owner resolution matches socket inodes against `/proc/<pid>/fd` (bounded to 8192 PIDs), records only the short process name (never the command line), and reports *unknown* rather than guessing. A startup grace window (`-listening-grace`, default 60s) absorbs slow-starting services.
+
+### Risk semantics (base severity + graded `ContextAdjust`, hard `Critical` only for highest-value targets)
+| Base | Context |
+|---|---|
+| posture 45 | `Critical` on shadow / sudoers / sshd_config / root `authorized_keys` |
+| config drift 35 | `Critical` on the same critical set; ordinary edits stay LOW/MEDIUM |
+| listening 40 | loopback −15, wildcard +10, specific non-loopback +5, privileged port (non-loopback) +10, unknown owner +5, removal −20 |
+| package 30 | routine upgrade −10, install +5 (+20 for dual-use patterns such as nmap/netcat), downgrade +20, state left half-configured +15, `Critical` for removal/downgrade of watched security packages |
+
+### Configuration (flags / env; all validated, invalid entries are dropped with a log line)
+`-system-posture`, `-posture-interval` (`VANGUARD_POSTURE_INTERVAL`, ≥1s, overrides all four), `-posture-paths`, `-drift-paths`, `-drift-hash-limit` (default 8 MiB), `-drift-report-first-observation`, `-expected-listeners` / `-ignored-listeners` (`proto/addr/port[/process]`, `*` wildcards), `-listening-grace`, `-listening-resolve-processes`, `-ignored-packages`, `-watched-packages`, `-dpkg-status`. Hard state bounds live in `internal/thresholds` (256 drift resources, 2048 listeners, 20000 packages, 64 MiB status file).
+
+### Dashboard / API
+Phase 4 incidents appear in the existing feed via `/api/incidents?type=…` (no new endpoints). The Incidents page now has an expandable **evidence row** (click the type) showing the incident's structured metadata for every incident type.
+
+### Platform assumptions & limitations
+Linux only; package drift supports Debian/Ubuntu dpkg only; no eBPF so a listener that opens and closes between scans is invisible; owner resolution needs root to see other users' fds; content hashing is skipped above the size limit (size-only comparison, so same-size edits to huge files are undetectable); correlation with Phase 2 (new listener after new process/package) is intentionally **not** implemented — the evidence is not strong enough to avoid false "chains".
+
+### Verification status (honest accounting)
+- Go unit tests for all four detectors + engine-level Phase 4 tests were run on a Windows dev machine (Go 1.27): 51 new tests (config drift 14, listening 17, package drift 16, engine 4), all pass except 2 that skip on Windows (mode change, /proc owner resolution via symlinks). `GOOS=linux go vet ./...` and `go build ./...` are clean; frontend `vite build` and 22 vitest tests pass.
+- **Not yet executed**: the Docker lab (`lab/run-phase4.sh`, scenarios P–U) and `go test -race` (no Docker/cgo on the dev machine). Run both on Linux before treating Phase 4 as verified.
+- On Windows, 7 pre-existing Unix-permission hostsec tests and 10 attack-chain tests in `internal/detection` fail identically on the pre-Phase-4 commit (confirmed against a clean worktree); they are environment-related, not Phase 4 regressions.
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.
 - Docker lab attack scenarios for the 7 Phase 1+2 Host Security detectors are still not present (Phase 3 only extended the lab for its own 9 web-security detectors + Web Attack Chain).
 - No dedicated dashboard widgets for any of the 9 Phase 3 incident types or `web_attack_chain` yet — they are visible today only via the generic `/api/incidents?type=...` feed (same situation Phase 2's 8 new incident types were already in; no API changes were needed to surface them).
 - Host Header/Virtual Host Abuse detection is a documented no-op whenever the web log line doesn't carry the optional trailing Host field — operators must apply the `lab/victim/nginx-vhost-log.conf`-style `log_format` change (or equivalent) to their own production nginx config for this detector to have any visibility at all; this is not automatic.
-- The mega-prompt's remaining phases beyond Phase 3 (e.g. "PHASE 2 — SYSTEM POSTURE": Configuration Posture Auditing, Configuration Drift Detection, Listening Service Drift, Package Drift Detection, and any phases after that) have not been started.
+- The mega-prompt's remaining phases after Phase 4 have not been started.
 
 ### Next Steps
 1. Visual QA pass against the original reference design once available.

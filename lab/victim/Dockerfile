@@ -72,7 +72,7 @@ RUN mkdir -p /var/www/html/wp-admin /var/www/html/uploads /var/www/html/wp-conte
 COPY lab/victim/nginx-vhost-log.conf /etc/nginx/conf.d/00-vhost-log-format.conf
 
 COPY lab/victim/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 COPY --from=build /out/vanguard /usr/local/bin/vanguard
 
