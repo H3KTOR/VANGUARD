@@ -83,6 +83,10 @@ type Finding struct {
 	// Threat Intelligence. Empty for every other scanner.
 	RemoteAddrs []string
 
+	// SHA256 lists file hashes VANGUARD itself computed for this finding
+	// (FIM / binary integrity / config drift), for exact IOC matching.
+	SHA256 []string
+
 	// RiskAdjust is a signed contextual adjustment applied on top of the
 	// incident type's base severity (Phase 4: e.g. a loopback-only
 	// listener is -15, an all-interface listener on a privileged port is

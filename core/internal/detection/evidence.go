@@ -70,6 +70,8 @@ func limitationFor(t database.IncidentType) string {
 		database.IncidentConfigurationDrift, database.IncidentConfigurationPosture,
 		database.IncidentListeningServiceDrift, database.IncidentPackageDrift:
 		return "periodic scan: changes that appear and revert between scans are not observable, and the actor is not identified; a change is not proof of malice"
+	case database.IncidentIOCMatch:
+		return "exact match of an observed value against a locally imported indicator: it shows a feed lists the value, not that the host is compromised, who the actor is, or that the indicator is still accurate; shared infrastructure (CDN, proxy, NAT) can make address matches misleading"
 	case database.IncidentSuspiciousProcess:
 		return "best-effort /proc heuristic; short-lived processes can be missed"
 	}

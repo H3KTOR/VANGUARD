@@ -133,6 +133,10 @@ var BaseSeverity = map[database.IncidentType]int{
 	// install from the configured high-risk-pattern list -- see
 	// hostsec/package_drift.go's classification.
 	database.IncidentPackageDrift: 30,
+
+	// Phase 6: an exact local-indicator match. Midpoint-low base; graded by
+	// the source-supplied confidence and capped (thresholds.MaxIOCOnlyRisk).
+	database.IncidentIOCMatch: 35,
 }
 
 // Breakdown documents how a RiskScore was derived. Every detector (real or

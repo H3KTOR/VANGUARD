@@ -180,7 +180,9 @@ func (db *DB) IncidentsPendingAnalysis(limit int) ([]Incident, error) {
 func (db *DB) CountRecentEventsByIP(ip string, since time.Time) (int64, error) {
 	var count int64
 	err := db.Model(&Incident{}).
-		Where("source_ip = ? AND detected_at >= ?", ip, since).
+		// ioc_match incidents are excluded: an indicator listing is itself
+		// the reputation signal and must not also count as a repeat offense.
+		Where("source_ip = ? AND detected_at >= ? AND type <> ?", ip, since, IncidentIOCMatch).
 		Count(&count).Error
 	return count, err
 }

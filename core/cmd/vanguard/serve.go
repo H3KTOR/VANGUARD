@@ -26,6 +26,7 @@ import (
 	"vanguard/core/internal/firewall"
 	"vanguard/core/internal/honeypot"
 	"vanguard/core/internal/hostsec"
+	"vanguard/core/internal/intel"
 	"vanguard/core/internal/metrics"
 	"vanguard/core/internal/notify"
 	"vanguard/core/internal/simulator"
@@ -64,6 +65,7 @@ type app struct {
 	collector  *metrics.Collector
 	honeypotS  *honeypot.Server
 	hostsecM   *hostsec.Manager
+	intelM     *intel.Matcher
 	echoSrv    *api.Server
 	echoHandle *echo.Echo // set once startHTTPServer runs; used by shutdown()
 
@@ -113,11 +115,19 @@ func buildApp(cfg serveConfig) (*app, error) {
 	// newly created Incident is evaluated for an automatic ban in real
 	// time, with zero coupling between the detection and firewall
 	// packages beyond the small Notifier interface. ---
-	engine := detection.NewEngine(detection.Config{
-		DB:       db,
-		MaxIdle:  cfg.StateMaxIdle,
-		Notifier: autopilot,
-	})
+	// Phase 6: local, offline threat intelligence. The matcher is also the
+	// engine's ThreatIntelChecker, which activates the (previously
+	// dormant) reputation bonus for medium/high-confidence IP indicators.
+	var iocMatcher *intel.Matcher
+	detCfg := detection.Config{DB: db, MaxIdle: cfg.StateMaxIdle, Notifier: autopilot}
+	if cfg.EnableIntel {
+		iocMatcher = intel.NewMatcher(db)
+		detCfg.IOC = iocMatcher
+		detCfg.ThreatIntel = iocMatcher
+	} else {
+		log.Println("[serve] local threat intelligence disabled (-intel=false)")
+	}
+	engine := detection.NewEngine(detCfg)
 
 	// --- 4. Metrics collector. ---
 	collector := metrics.NewCollector(db, cfg.MetricsInterval, cfg.DiskPath, cfg.MetricsRetention)
@@ -165,6 +175,7 @@ func buildApp(cfg serveConfig) (*app, error) {
 	if cfg.EnableHostSecurity {
 		echoSrv.Detectors = hostsecMgr
 	}
+	echoSrv.Intel = iocMatcher
 
 	return &app{
 		cfg:       cfg,
@@ -175,6 +186,7 @@ func buildApp(cfg serveConfig) (*app, error) {
 		collector: collector,
 		honeypotS: honeypotSrv,
 		hostsecM:  hostsecMgr,
+		intelM:    iocMatcher,
 		echoSrv:   echoSrv,
 	}, nil
 }
@@ -268,6 +280,14 @@ func (a *app) startBackgroundTasks(ctx context.Context) {
 		})
 	} else {
 		log.Println("[serve] Host Security scanners disabled (-hostsec=false)")
+	}
+
+	// --- Local IOC snapshot refresh (bounded staleness; imports and
+	// operator changes also reload immediately via the API). ---
+	if a.intelM != nil {
+		a.goTracked(func() {
+			a.intelM.Run(ctx, 5*time.Minute)
+		})
 	}
 
 	// --- Autopilot maintenance loop: periodically reaps expired TTL bans

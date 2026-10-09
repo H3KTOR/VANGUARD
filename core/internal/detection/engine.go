@@ -55,6 +55,8 @@ type Engine struct {
 	authP     *AuthLogParser
 	webP      *WebLogParser
 	dedupe    *dedupeWindow
+	ioc       IOCMatcher        // Phase 6: nil when no intelligence is configured
+	iocDedupe *dedupeWindow     // Phase 6: long cooldown per (indicator, actor, field)
 	chain     *ChainTracker     // Task 3: cross-signal attack-chain correlation state
 	scanner   *ScannerTracker   // Task 3: web-scanner-behavior heuristic state
 	hostCor   *HostCorrelator   // Mega Expansion Phase 2, Feature 7: process/file/network correlation state
@@ -80,6 +82,9 @@ type Config struct {
 	// created. Optional; defaults to a no-op. The firewall/Autopilot
 	// package should implement this to react in real time.
 	Notifier Notifier
+	// IOC, when set, enables exact local threat-indicator matching
+	// (Phase 6). Optional; nil disables it entirely.
+	IOC IOCMatcher
 }
 
 // NewEngine constructs a detection Engine bound to db.
@@ -100,6 +105,8 @@ func NewEngine(cfg Config) *Engine {
 		authP:     NewAuthLogParser(),
 		webP:      NewWebLogParser(),
 		dedupe:    newDedupeWindow(2 * time.Minute),
+		ioc:       cfg.IOC,
+		iocDedupe: newDedupeWindow(thresholds.IOCMatchCooldown),
 		chain:     NewChainTracker(cfg.MaxIdle),
 		scanner:   NewScannerTracker(cfg.MaxIdle),
 		hostCor:   NewHostCorrelator(),
@@ -215,6 +222,8 @@ func (e *Engine) handleEvent(ev *Event) {
 	if ev.SourceIP == "" {
 		return
 	}
+
+	e.checkIOC(ev)
 
 	switch ev.Kind {
 	case EventSSHAuthFailure:
@@ -628,10 +637,10 @@ func (e *Engine) recentCount(ip string) int {
 // logged rather than returned/panicked since this is called from the hot
 // path of log ingestion -- a DB hiccup must never crash the tailer or drop
 // subsequent events.
-func (e *Engine) createIncident(itype database.IncidentType, ev *Event, attemptCount int, breakdown risk.Breakdown, extra map[string]any) {
+func (e *Engine) createIncident(itype database.IncidentType, ev *Event, attemptCount int, breakdown risk.Breakdown, extra map[string]any) *database.Incident {
 	if e.db == nil {
 		log.Printf("[detection] WARNING: no database configured, dropping %s incident for %s", itype, ev.SourceIP)
-		return
+		return nil
 	}
 
 	inc := &database.Incident{
@@ -650,17 +659,21 @@ func (e *Engine) createIncident(itype database.IncidentType, ev *Event, attemptC
 	for k, v := range extra {
 		meta[k] = v
 	}
+	var enriched = e.enrichIfApplicable(itype, ev, meta)
+
 	// Provenance, secret redaction and the size bound are applied here,
 	// at the single choke point, so no detector can bypass them.
 	inc.Metadata = prepareEvidence(itype, meta)
 
 	if err := e.db.CreateIncident(inc); err != nil {
 		log.Printf("[detection] failed to persist %s incident on %s: %v", itype, ev.SourceIP, err)
-		return
+		return nil
 	}
+	e.recordEnrichment(enriched, ev, inc)
 
 	log.Printf("[detection] incident #%d: %s from %s (risk=%d/%s)", inc.ID, itype, ev.SourceIP, breakdown.Total, inc.Severity)
 	e.notify.OnIncident(inc)
+	return inc
 }
 
 // decodeRequestTarget percent-decodes a logged request target for

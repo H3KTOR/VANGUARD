@@ -754,3 +754,19 @@ const (
 	// scan interval so a typo cannot turn a scanner into a busy loop.
 	MinPhase4ScanInterval = 1 * time.Second
 )
+
+// --- Phase 6: local threat intelligence ---
+
+const (
+	// IOCMatchCooldown suppresses repeat ioc_match incidents for the same
+	// (indicator, actor, field). Long on purpose: a sustained scanner from
+	// a listed address would otherwise open an incident every couple of
+	// minutes. Genuine recurrence after the cooldown is reported again.
+	IOCMatchCooldown = time.Hour
+
+	// MaxIOCOnlyRisk caps the risk of an incident that exists ONLY because
+	// an indicator matched. It sits below the default auto-ban threshold
+	// (60) so a feed entry alone never triggers automated blocking;
+	// combined behavioral evidence is scored by the behavioral detectors.
+	MaxIOCOnlyRisk = 55
+)

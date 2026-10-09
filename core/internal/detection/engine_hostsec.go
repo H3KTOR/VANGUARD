@@ -56,6 +56,10 @@ func (e *Engine) ReportHostFinding(f hostsec.Finding) {
 		e.hostCor.RecordProcessFinding(now, thresholds.HostCorrelationWindow)
 	}
 
+	// Phase 6: exact IOC matching on hashes / remote addresses carried by
+	// the finding. Independent of the finding's own dedupe below.
+	e.checkHostIOC(f.SHA256, f.RemoteAddrs, f.Subject, now)
+
 	if !e.dedupe.allow(database.HostLocalIP+"|"+f.Subject, f.Type) {
 		return
 	}

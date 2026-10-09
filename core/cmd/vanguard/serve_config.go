@@ -51,8 +51,10 @@ type serveConfig struct {
 	// Account, Privilege Escalation, SUID/SGID scanners. See
 	// internal/hostsec/manager.go. ---
 	EnableHostSecurity bool
-	FIMPaths           []string
-	SUIDScanRoots      []string
+	// EnableIntel turns local IOC matching on/off (Phase 6).
+	EnableIntel   bool
+	FIMPaths      []string
+	SUIDScanRoots []string
 	// BinaryPaths (Mega Expansion, Phase 2, Feature 8: System Binary
 	// Integrity). Kept separate from FIMPaths even though both feed the
 	// same underlying pathBaselineWatcher engine, since they are
@@ -111,6 +113,7 @@ func parseServeFlags(args []string) serveConfig {
 	suidRoots := fs.String("suid-roots", envOr("VANGUARD_SUID_ROOTS", ""), "Comma-separated list of additional directories to scan for SUID/SGID binaries (appended to the built-in defaults)")
 	binaryPaths := fs.String("binary-paths", envOr("VANGUARD_BINARY_PATHS", ""), "Comma-separated list of additional security-critical binaries for System Binary Integrity monitoring (appended to the built-in defaults)")
 
+	enableIntel := fs.Bool("intel", true, "Enable local (offline) threat-intelligence IOC matching")
 	systemPosture := fs.Bool("system-posture", true, "Enable Phase 4 System Posture detectors (configuration posture/drift, listening-service drift, package drift)")
 	postureInterval := fs.Duration("posture-interval", envDuration("VANGUARD_POSTURE_INTERVAL"), "Override the scan interval of every Phase 4 detector (0 = per-detector defaults; minimum 1s)")
 	posturePaths := fs.String("posture-paths", envOr("VANGUARD_POSTURE_PATHS", ""), "Comma-separated extra absolute paths for Configuration Posture (world-writable check)")
@@ -158,6 +161,7 @@ func parseServeFlags(args []string) serveConfig {
 		TelegramChatID:   telegramChatID,
 
 		EnableHostSecurity: *enableHostSecurity,
+		EnableIntel:        *enableIntel,
 		FIMPaths:           append(append([]string{}, thresholds.DefaultFIMPaths...), splitAndTrim(*fimPaths)...),
 		SUIDScanRoots:      append(append([]string{}, thresholds.DefaultSUIDScanRoots...), splitAndTrim(*suidRoots)...),
 		BinaryPaths:        append(append([]string{}, thresholds.DefaultSystemBinaryPaths...), splitAndTrim(*binaryPaths)...),

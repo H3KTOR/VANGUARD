@@ -16,6 +16,7 @@ import (
 	"vanguard/core/internal/detection"
 	"vanguard/core/internal/firewall"
 	"vanguard/core/internal/hostsec"
+	"vanguard/core/internal/intel"
 	"vanguard/core/internal/simulator"
 )
 
@@ -32,6 +33,9 @@ type Server struct {
 	// Detectors exposes per-scanner operational status (optional; nil
 	// when Host Security scanning is disabled).
 	Detectors DetectorStatusSource
+
+	// Intel is the local IOC matcher (optional; nil when disabled).
+	Intel *intel.Matcher
 }
 
 // DetectorStatusSource is implemented by *hostsec.Manager.
@@ -74,6 +78,14 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.GET("/incidents/:id", s.handleGetIncident)
 	protected.PUT("/incidents/:id/status", s.handleUpdateIncidentStatus)
 	protected.GET("/detectors/status", s.handleDetectorStatus)
+	protected.GET("/intel/status", s.handleIntelStatus)
+	protected.GET("/intel/iocs", s.handleListIOCs)
+	protected.GET("/intel/iocs/:id", s.handleGetIOC)
+	protected.PUT("/intel/iocs/:id", s.handleUpdateIOC)
+	protected.DELETE("/intel/iocs/:id", s.handleDeleteIOC)
+	protected.POST("/intel/import", s.handleImportIOCs)
+	protected.GET("/intel/imports", s.handleListIOCImports)
+	protected.GET("/hunt/matches", s.handleHuntMatches)
 	protected.GET("/incidents/:id/events", s.handleListIncidentEvents)
 	protected.GET("/incidents/:id/response-plan", s.handleIncidentResponsePlan)
 	protected.POST("/incidents/:id/block", s.handleBlockIncidentIP)

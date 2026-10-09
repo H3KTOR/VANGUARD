@@ -148,12 +148,17 @@ func (w *pathBaselineWatcher) report(path, change string, prev, curr fileMeta) {
 	if critical {
 		note = w.criticalNote + " (" + path + ")"
 	}
+	var hashes []string
+	if curr.Hash != "" {
+		hashes = []string{curr.Hash}
+	}
 	w.reporter.ReportHostFinding(Finding{
 		Type:           w.incidentType,
 		Change:         change,
 		Subject:        path,
 		Critical:       critical,
 		EscalationNote: note,
+		SHA256:         hashes,
 		Details: map[string]any{
 			"path":            path,
 			"change":          change,

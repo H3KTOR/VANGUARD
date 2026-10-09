@@ -232,12 +232,17 @@ func (d *ConfigDriftDetector) report(p string, fields []string, change string, p
 	if critical {
 		note = "configuration drift on a highest-value authentication/access-control resource (" + p + ")"
 	}
+	var hashes []string
+	if curr.Hash != "" {
+		hashes = []string{curr.Hash}
+	}
 	d.reporter.ReportHostFinding(Finding{
 		Type:           database.IncidentConfigurationDrift,
 		Change:         change,
 		Subject:        "config_drift:" + p + ":" + strings.Join(fields, "+") + ":" + stateFingerprint(curr),
 		Critical:       critical,
 		EscalationNote: note,
+		SHA256:         hashes,
 		Details: map[string]any{
 			"resource":         p,
 			"changed_fields":   fields,
