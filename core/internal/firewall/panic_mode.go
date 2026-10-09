@@ -46,7 +46,8 @@ type panicController struct {
 // two-step confirmation to proceed.
 func (a *Autopilot) PreviewPanicMode(adminIP string) PanicPreview {
 	keepIPs := append([]string{}, a.cfg.AdminWhitelistIPs...)
-	if adminIP != "" {
+	if nip, err := NormalizeIP(adminIP); err == nil { // an unparseable caller address is not trusted as an allow-list entry
+		adminIP = nip
 		keepIPs = appendIfMissing(keepIPs, adminIP)
 	}
 	return PanicPreview{
@@ -72,7 +73,8 @@ func (a *Autopilot) EnterPanicMode(ctx context.Context, adminIP, reason string, 
 	}
 
 	keepIPs := append([]string{}, a.cfg.AdminWhitelistIPs...)
-	if adminIP != "" {
+	if nip, err := NormalizeIP(adminIP); err == nil { // an unparseable caller address is not trusted as an allow-list entry
+		adminIP = nip
 		keepIPs = appendIfMissing(keepIPs, adminIP)
 	}
 

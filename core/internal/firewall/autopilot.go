@@ -239,6 +239,12 @@ func (a *Autopilot) HandleIncident(ctx context.Context, inc *database.Incident) 
 // inconclusive verification keeps the block (removing protection on
 // uncertainty would be worse) but is recorded as inconclusive.
 func (a *Autopilot) Ban(ctx context.Context, ip, reason string, duration time.Duration, incidentID *uint, source database.FirewallSource) error {
+	nip, nerr := NormalizeIP(ip)
+	if nerr != nil {
+		a.recordEvent(incidentID, database.EventResponse, "suppressed", "refused: target is not a single valid IP address")
+		return fmt.Errorf("refusing to ban %q: %w", truncateDetail(ip), nerr)
+	}
+	ip = nip
 	unlock := a.lockIP(ip)
 	defer unlock()
 	return a.banLocked(ctx, ip, reason, duration, incidentID, source)
@@ -342,6 +348,11 @@ func (a *Autopilot) ManualUnban(ctx context.Context, ruleID uint) error {
 // Whitelist adds ip to the fail-safe whitelist so it can never be
 // auto-banned, and immediately lifts any existing active ban on it.
 func (a *Autopilot) Whitelist(ctx context.Context, ip, reason string) error {
+	nip, nerr := NormalizeIP(ip)
+	if nerr != nil {
+		return fmt.Errorf("refusing to whitelist %q: %w", truncateDetail(ip), nerr)
+	}
+	ip = nip
 	if err := a.exec.Allow(ctx, ip); err != nil {
 		return fmt.Errorf("firewall allow failed: %w", err)
 	}
@@ -415,11 +426,23 @@ func (a *Autopilot) ReconcileOnStartup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	applied, skipped := 0, 0
 	for _, rule := range active {
-		if err := a.exec.Block(ctx, rule.IPAddress); err != nil {
-			log.Printf("[autopilot] reconcile: failed to re-apply ban on %s: %v", rule.IPAddress, err)
+		// A simulated ban never touched the real firewall, so restarting must
+		// not turn demo data into a real block. A row whose address is not one
+		// valid IP is never handed to the firewall either (it could be a range
+		// that locks everyone out).
+		ip, nerr := NormalizeIP(rule.IPAddress)
+		if rule.Source == database.FirewallSourceSimulator || nerr != nil {
+			skipped++
+			continue
 		}
+		if err := a.exec.Block(ctx, ip); err != nil {
+			log.Printf("[autopilot] reconcile: failed to re-apply ban on %s: %v", ip, err)
+			continue
+		}
+		applied++
 	}
-	log.Printf("[autopilot] reconciled %d active ban(s) with the OS firewall on startup", len(active))
+	log.Printf("[autopilot] reconciled %d of %d active ban(s) with the OS firewall on startup (%d skipped: simulated or not a single valid IP)", applied, len(active), skipped)
 	return nil
 }

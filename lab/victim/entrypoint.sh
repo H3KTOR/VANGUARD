@@ -59,6 +59,8 @@ echo "[victim] starting VANGUARD Core..."
 exec /usr/local/bin/vanguard serve \
     -db=/data/vanguard.db \
     -http-addr=:8080 \
+    -allow-remote-bootstrap \
+    -allowed-hosts=victim \
     -auth-log=/var/log/auth.log \
     -web-log=/var/log/nginx/access.log \
     -honeypot=true \

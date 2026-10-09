@@ -6,6 +6,7 @@ package api
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -58,6 +59,34 @@ type Server struct {
 
 	// QueueStats lists the log-ingestion queues for runtime health (optional).
 	QueueStats func() []pipeline.Stats
+
+	// Security is the browser/network trust configuration (Phase 13).
+	Security SecurityConfig
+
+	// BackupMinGap / SimulateMinGap are the minimum pause between two runs of
+	// those operations (zero = only one at a time). cmd/vanguard sets sensible
+	// values; tests leave them zero.
+	BackupMinGap   time.Duration
+	SimulateMinGap time.Duration
+
+	sec          secCounters
+	loginLimiter *failureLimiter
+	hashSem      chan struct{}
+	registerMu   sync.Mutex
+	backupGate   *opGate
+	importGate   *opGate
+	simGate      *opGate
+	initOnce     sync.Once
+}
+
+func (s *Server) initSecurityState() {
+	s.initOnce.Do(func() {
+		s.loginLimiter = newFailureLimiter(loginMaxFailures, loginFailureWindow, loginMaxTracked)
+		s.hashSem = make(chan struct{}, bcryptConcurrency)
+		s.backupGate = newOpGate(s.BackupMinGap)
+		s.importGate = newOpGate(0)
+		s.simGate = newOpGate(s.SimulateMinGap)
+	})
 }
 
 // DetectorStatusSource is implemented by *hostsec.Manager.
@@ -75,13 +104,13 @@ func (s *Server) NewEcho() *echo.Echo {
 	e.HideBanner = true
 	e.HTTPErrorHandler = s.errorHandler
 
+	s.initSecurityState()
+
 	e.Use(middleware.Recover())
 	e.Use(middleware.Logger())
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodOptions},
-		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAuthorization},
-	}))
+	// Host check, security headers, optional explicit CORS allow-list (never
+	// "*"), cross-origin write refusal and request body bounds.
+	s.applySecurity(e)
 
 	// ---- Public ----
 	e.GET("/api/health", s.handleHealth)
@@ -105,6 +134,7 @@ func (s *Server) NewEcho() *echo.Echo {
 	protected.POST("/backup", s.handleCreateBackup)
 	protected.GET("/backup/:name/verify", s.handleVerifyBackup)
 	protected.GET("/retention", s.handleRetention)
+	protected.GET("/audit/admin", s.handleAdminAudit)
 	protected.GET("/rules", s.handleListRules)
 	protected.GET("/rules/tuning", s.handleGetTuning)
 	protected.POST("/rules/tuning/preview", s.handlePreviewTuning)

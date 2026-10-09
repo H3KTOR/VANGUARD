@@ -157,6 +157,7 @@ func (s *Server) runtimeComponents(ctx context.Context, now time.Time) []health.
 			out = append(out, queueComponent(q, now))
 		}
 	}
+	out = append(out, s.securityComponent(now))
 	if s.Guard != nil {
 		out = append(out, guardComponent(s.Guard.Stats()))
 	}

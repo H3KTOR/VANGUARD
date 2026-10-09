@@ -1,12 +1,14 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/labstack/echo/v4"
 
 	"vanguard/core/internal/auth"
+	"vanguard/core/internal/database"
 )
 
 // claimsContextKey is the echo.Context key handlers use to retrieve the
@@ -30,6 +32,30 @@ func (s *Server) jwtMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
 		if err != nil {
 			return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired token")
 		}
+		// A signed token is only a claim about the past. Re-check the live
+		// account on every request so that disabling or demoting an account,
+		// or restoring a backup that lacks it, takes effect immediately instead
+		// of when the token expires. The role in force is the database's, not
+		// the one frozen into the token. Fail closed if the check cannot run.
+		user, uerr := s.DB.GetUserByID(claims.UserID)
+		switch {
+		case errors.Is(uerr, database.ErrNotFound):
+			return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired token")
+		case uerr != nil:
+			// The one documented exception to failing closed: the read-only
+			// runtime-health report must still answer when the database is down
+			// (that is exactly when an operator needs it). It exposes component
+			// states and counters only, and still requires a validly signed,
+			// unexpired token.
+			if c.Request().Method == http.MethodGet && c.Request().URL.Path == "/api/health/runtime" {
+				c.Set(claimsContextKey, claims)
+				return next(c)
+			}
+			return echo.NewHTTPError(http.StatusServiceUnavailable, "authentication backend unavailable")
+		case !user.IsActive || !strings.EqualFold(user.Email, claims.Email):
+			return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired token")
+		}
+		claims.Role = user.Role
 		c.Set(claimsContextKey, claims)
 		return next(c)
 	}

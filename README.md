@@ -227,6 +227,16 @@ Audit, measurements and limits: [docs/PHASE12.md](docs/PHASE12.md). Status: **Im
 - **Query containment**: a measured fact — this SQLite driver does not interrupt a running statement on context cancel — so expensive API reads run under a concurrency guard (`-query-limit`, `-query-timeout`) that returns 503 + `Retry-After` to the caller while the statement finishes in the background.
 - **Retention** (`vanguard retention show|set|run|history`): off by default (0 days = keep everything). When enabled it deletes only old resolved/false-positive/auto-blocked incidents with no active ban (and, by default, no live analyst note) in bounded, atomic, idempotent batches; dry run first; every action is audited; open/investigating incidents, audit/tuning/backup history and IOC matches are never deleted. No HTTP route can change or run it (`GET /api/retention` is read-only, admin-only).
 
+## Phase 13 — API Security & Abuse Resistance
+
+Findings, full route inventory, trust boundary and compatibility notes: [docs/PHASE13.md](docs/PHASE13.md). Status: **Implemented — Verification Pending** (Windows only).
+
+- **Safeguard gaps closed**: manual/API firewall actions accept one valid IP only (no `any`, no CIDR; spelling variants cannot step around the whitelist); simulated bans are never replayed to the real firewall on restart.
+- **Defaults are local**: bind `127.0.0.1:8080`, no CORS, a Host allow-list (DNS-rebinding), cross-origin writes refused, first-run admin creation only from the host itself (race-free), JWT secrets < 32 chars and non-IP `-admin-ip` values refused at startup.
+- **Sessions**: every request re-validates the account (disabled/deleted/demoted take effect immediately; the role is the database's); login failures are uniform and throttled per address; client addresses never come from forwarded headers.
+- **Bounds & auditability**: body/header/time limits, strict filters and ranges, gated expensive admin operations, sanitized errors, and an `admin_audits` trail (`GET /api/audit/admin`) for privileged actions. A test fails if a route is added without a documented authorization expectation.
+- **Compatibility**: see PHASE13.md §13.9 (default bind, Host names behind proxies, token re-validation, stricter inputs).
+
 ### 🚧 Not Yet Implemented / Known Gaps
 - Exact pixel-for-pixel visual match against the originally referenced screenshot could not be verified in this environment (the reference image file was never present in the sandbox); the dashboard was built from the detailed widget spec and is functionally complete, but should be visually spot-checked against the original design if/when it's available.
 - 2 npm audit findings (1 moderate, 1 high) in frontend dependencies — not yet triaged.

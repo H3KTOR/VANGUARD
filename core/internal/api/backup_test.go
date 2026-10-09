@@ -39,7 +39,7 @@ func backupServer(t *testing.T, withDir bool) (*httptest.Server, *database.DB, s
 	ts := httptest.NewServer(srv.NewEcho())
 	t.Cleanup(ts.Close)
 	admin := bootstrapAdminToken(t, ts)
-	viewer, _, _ := mgr.IssueToken(&database.User{Email: "viewer@x", Role: database.RoleViewer})
+	viewer := realUserToken(t, db, mgr, "viewer@x.test", database.RoleViewer)
 	_ = db.CreateIncident(&database.Incident{Type: database.IncidentPortScan, SourceIP: "203.0.113.1", RiskScore: 10, DetectedAt: time.Now().UTC()})
 	return ts, db, admin, viewer, bdir
 }

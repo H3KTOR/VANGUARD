@@ -42,7 +42,7 @@ func TestShutdownIsIdempotent(t *testing.T) {
 }
 
 func TestHealthRegistryReflectsConfiguration(t *testing.T) {
-	cfg := parseServeFlags([]string{"-auth-log", "", "-web-log", "/a.log,/b.log", "-jwt-secret", "x-x-x-x-x-x-x-x-x-x-x-x"})
+	cfg := parseServeFlags([]string{"-auth-log", "", "-web-log", "/a.log,/b.log", "-jwt-secret", "x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x-x"})
 	reg := newRuntimeRegistry(cfg)
 	got := map[string]string{}
 	for _, c := range reg.Snapshot() {

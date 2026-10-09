@@ -69,6 +69,11 @@ func (s *Server) handleCreateBackup(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	release, wait, ok := s.backupGate.enter()
+	if !ok {
+		return s.opLimited(c, "backup.create", wait)
+	}
+	defer release()
 	name, m, cerr := backup.Create(s.DB, backup.CreateOptions{Dir: s.BackupDir, Label: req.Label, ExcludeUsers: req.ExcludeUsers, Actor: actor, Now: time.Now().UTC()})
 	res, detail, sum := "ok", "", ""
 	if cerr != nil {

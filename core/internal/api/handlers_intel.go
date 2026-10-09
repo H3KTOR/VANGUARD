@@ -155,13 +155,20 @@ func (s *Server) handleUpdateIOC(c echo.Context) error {
 	if err := c.Bind(&p); err != nil || p.Enabled == nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "body must be {\"enabled\": true|false}")
 	}
+	target := "ioc:" + strconv.FormatUint(uint64(id), 10)
+	action := "ioc.disable"
+	if *p.Enabled {
+		action = "ioc.enable"
+	}
 	ioc, err := s.DB.SetIOCEnabled(id, *p.Enabled)
 	if err != nil {
+		s.audit(c, action, target, auditFailed, "")
 		if errors.Is(err, database.ErrNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "indicator not found")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update indicator")
 	}
+	s.audit(c, action, target, auditOK, "")
 	s.reloadIntel()
 	return c.JSON(http.StatusOK, viewOf(*ioc, time.Now().UTC()))
 }
@@ -175,12 +182,15 @@ func (s *Server) handleDeleteIOC(c echo.Context) error {
 	if err != nil {
 		return err
 	}
+	target := "ioc:" + strconv.FormatUint(uint64(id), 10)
 	if err := s.DB.DeleteIOC(id); err != nil {
+		s.audit(c, "ioc.delete", target, auditFailed, "")
 		if errors.Is(err, database.ErrNotFound) {
 			return echo.NewHTTPError(http.StatusNotFound, "indicator not found")
 		}
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to delete indicator")
 	}
+	s.audit(c, "ioc.delete", target, auditOK, "")
 	s.reloadIntel()
 	return c.JSON(http.StatusOK, echo.Map{"message": "indicator deleted"})
 }
@@ -196,19 +206,28 @@ func (s *Server) handleImportIOCs(c echo.Context) error {
 	if err := requireAdmin(c); err != nil {
 		return err
 	}
+	release, wait, ok := s.importGate.enter()
+	if !ok {
+		return s.opLimited(c, "ioc.import", wait)
+	}
+	defer release()
 	body := http.MaxBytesReader(c.Response(), c.Request().Body, intel.MaxImportBytes+1)
+	src := cleanReason(c.QueryParam("source"), 64)
 	rep, err := intel.Import(s.DB, body, intel.ImportOptions{
-		Source:        c.QueryParam("source"),
+		Source:        src,
 		Strict:        boolParam(c, "strict"),
 		ReplaceSource: boolParam(c, "replace_source"),
 		AllowShrink:   boolParam(c, "allow_shrink"),
 	})
 	if err != nil {
 		if errors.Is(err, intel.ErrImportRejected) {
+			s.audit(c, "ioc.import", "source:"+src, auditRefused, "feed rejected")
 			return c.JSON(http.StatusUnprocessableEntity, rep)
 		}
+		s.audit(c, "ioc.import", "source:"+src, auditFailed, "")
 		return echo.NewHTTPError(http.StatusInternalServerError, "import failed")
 	}
+	s.audit(c, "ioc.import", "source:"+src, auditOK, "")
 	s.reloadIntel()
 	return c.JSON(http.StatusOK, rep)
 }

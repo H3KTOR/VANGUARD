@@ -59,9 +59,14 @@ type serveConfig struct {
 	// EnableIntel turns local IOC matching on/off (Phase 6).
 	EnableIntel bool
 	// BackupDir is the directory API-created backups are written to.
-	BackupDir     string
-	FIMPaths      []string
-	SUIDScanRoots []string
+	BackupDir string
+
+	// Phase 13 trust boundary.
+	AllowedOrigins       []string
+	AllowedHosts         []string
+	AllowRemoteBootstrap bool
+	FIMPaths             []string
+	SUIDScanRoots        []string
 	// BinaryPaths (Mega Expansion, Phase 2, Feature 8: System Binary
 	// Integrity). Kept separate from FIMPaths even though both feed the
 	// same underlying pathBaselineWatcher engine, since they are
@@ -91,7 +96,7 @@ func parseServeFlags(args []string) serveConfig {
 	dbPath := fs.String("db", envOr("VANGUARD_DB_PATH", "vanguard.db"), "Path to the SQLite database file")
 	verbose := fs.Bool("verbose", false, "Enable verbose SQL logging (development only)")
 
-	httpAddr := fs.String("http-addr", envOr("VANGUARD_HTTP_ADDR", ":8080"), "Address the REST API + dashboard listen on")
+	httpAddr := fs.String("http-addr", envOr("VANGUARD_HTTP_ADDR", "127.0.0.1:8080"), "Address the REST API + dashboard listen on (default loopback only; use a TLS reverse proxy or SSH tunnel for remote access)")
 
 	authLog := fs.String("auth-log", envOr("VANGUARD_AUTH_LOG", "/var/log/auth.log"), "Path to the SSH/system auth log to tail (empty to disable)")
 	webLogs := fs.String("web-log", envOr("VANGUARD_WEB_LOG", ""), "Comma-separated list of Nginx/Apache access log paths to tail")
@@ -118,6 +123,10 @@ func parseServeFlags(args []string) serveConfig {
 	ingestQueue := fs.Int("ingest-queue", 1024, "Lines buffered per log source between the tailer and detection (1-65536). When full, the tailer waits (backpressure); no line is dropped for being late")
 	queryLimit := fs.Int("query-limit", 4, "Maximum concurrent expensive API reads (investigation, hunt, export, lists); excess requests get 503")
 	queryTimeout := fs.Duration("query-timeout", 15*time.Second, "How long an expensive API read may take before the caller gets 503 (the SQLite statement itself cannot be interrupted)")
+
+	allowedOrigins := fs.String("allowed-origins", envOr("VANGUARD_ALLOWED_ORIGINS", ""), "Comma-separated origins (https://host[:port]) allowed to call the API cross-origin. Default none: the embedded dashboard is same-origin. \"*\" is refused")
+	allowedHosts := fs.String("allowed-hosts", envOr("VANGUARD_ALLOWED_HOSTS", ""), "Comma-separated DNS names the API may be addressed by (IP literals and localhost are always allowed; \"*\" disables the Host check)")
+	allowRemoteBootstrap := fs.Bool("allow-remote-bootstrap", false, "Allow the first-run admin account to be created from a non-loopback address (default: only from the host itself)")
 
 	enableHostSecurity := fs.Bool("hostsec", true, "Enable Host Security scanners (FIM, Persistence, Account, Privilege Escalation, SUID/SGID monitoring)")
 	fimPaths := fs.String("fim-paths", envOr("VANGUARD_FIM_PATHS", ""), "Comma-separated list of additional sensitive files/directories for File Integrity Monitoring (appended to the built-in defaults)")
@@ -188,12 +197,20 @@ func parseServeFlags(args []string) serveConfig {
 		TelegramBotToken: telegramBotToken,
 		TelegramChatID:   telegramChatID,
 
-		EnableHostSecurity: *enableHostSecurity,
-		EnableIntel:        *enableIntel,
-		BackupDir:          *backupDir,
-		FIMPaths:           append(append([]string{}, thresholds.DefaultFIMPaths...), splitAndTrim(*fimPaths)...),
-		SUIDScanRoots:      append(append([]string{}, thresholds.DefaultSUIDScanRoots...), splitAndTrim(*suidRoots)...),
-		BinaryPaths:        append(append([]string{}, thresholds.DefaultSystemBinaryPaths...), splitAndTrim(*binaryPaths)...),
+		EnableHostSecurity:   *enableHostSecurity,
+		EnableIntel:          *enableIntel,
+		BackupDir:            *backupDir,
+		AllowedOrigins:       splitAndTrim(*allowedOrigins),
+		AllowedHosts:         splitAndTrim(*allowedHosts),
+		AllowRemoteBootstrap: *allowRemoteBootstrap,
+		FIMPaths:             append(append([]string{}, thresholds.DefaultFIMPaths...), splitAndTrim(*fimPaths)...),
+		SUIDScanRoots:        append(append([]string{}, thresholds.DefaultSUIDScanRoots...), splitAndTrim(*suidRoots)...),
+		BinaryPaths:          append(append([]string{}, thresholds.DefaultSystemBinaryPaths...), splitAndTrim(*binaryPaths)...),
+	}
+
+	if err := validateSecurityConfig(&cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "vanguard serve: %v\n", err)
+		os.Exit(2)
 	}
 
 	sp := hostsec.DefaultSystemPostureConfig()

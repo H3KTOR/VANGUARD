@@ -4,11 +4,13 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"vanguard/core/internal/database"
+	"vanguard/core/internal/intel"
 )
 
 // handleListIncidents supports the dashboard's incident feed with optional
@@ -16,24 +18,42 @@ import (
 func (s *Server) handleListIncidents(c echo.Context) error {
 	f := database.IncidentFilter{
 		Status:   database.IncidentStatus(c.QueryParam("status")),
-		Severity: database.Severity(c.QueryParam("severity")),
+		Severity: database.Severity(strings.ToUpper(c.QueryParam("severity"))),
 		Type:     database.IncidentType(c.QueryParam("type")),
 		SourceIP: c.QueryParam("ip"),
 	}
-	if v := c.QueryParam("since_hours"); v != "" {
-		if hours, err := strconv.Atoi(v); err == nil && hours > 0 {
-			f.Since = time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
-		}
+	// Malformed filters are client errors, never silently ignored (an ignored
+	// filter would return a different, larger result than the caller asked for).
+	if f.Status != "" && !database.IsKnownStatus(f.Status) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid status")
 	}
-	if v := c.QueryParam("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			f.Limit = n
-		}
+	switch f.Severity {
+	case "", database.SeverityLow, database.SeverityMedium, database.SeverityHigh, database.SeverityCritical:
+	default:
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid severity")
 	}
-	if v := c.QueryParam("offset"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			f.Offset = n
+	if f.Type != "" && (len(f.Type) > 64 || strings.ContainsAny(string(f.Type), " '\";")) {
+		return echo.NewHTTPError(http.StatusBadRequest, "invalid type")
+	}
+	if f.SourceIP != "" {
+		ip, ok := intel.NormalizeObservedIP(f.SourceIP)
+		if !ok {
+			return echo.NewHTTPError(http.StatusBadRequest, "invalid ip")
 		}
+		f.SourceIP = ip
+	}
+	hours, err := atoiBounded(c, "since_hours", 0, 0, 24*365)
+	if err != nil {
+		return err
+	}
+	if hours > 0 {
+		f.Since = time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
+	}
+	if f.Limit, err = atoiBounded(c, "limit", 100, 1, 500); err != nil {
+		return err
+	}
+	if f.Offset, err = atoiBounded(c, "offset", 0, 0, 10000); err != nil {
+		return err
 	}
 
 	var incidents []database.Incident
@@ -177,11 +197,18 @@ func (s *Server) handleBlockIncidentIP(c echo.Context) error {
 	}
 
 	var req blockIncidentRequest
-	_ = c.Bind(&req) // optional body; ignore parse errors and fall back to defaults
+	// The body is optional, but a body that is present must be valid.
+	if c.Request().ContentLength != 0 {
+		if err := decodeStrict(c, &req); err != nil {
+			return err
+		}
+	}
 
 	duration := 1 * time.Hour
-	if req.DurationMinutes > 0 {
-		duration = time.Duration(req.DurationMinutes) * time.Minute
+	if d, err := banMinutes(req.DurationMinutes); err != nil {
+		return err
+	} else if d > 0 {
+		duration = d
 	}
 
 	claims := currentClaims(c)
@@ -190,9 +217,12 @@ func (s *Server) handleBlockIncidentIP(c echo.Context) error {
 		reason += " by " + claims.Email
 	}
 
+	target := "incident:" + strconv.FormatUint(uint64(inc.ID), 10)
 	if err := s.Autopilot.Ban(c.Request().Context(), inc.SourceIP, reason, duration, &inc.ID, database.FirewallSourceManual); err != nil {
-		return echo.NewHTTPError(http.StatusConflict, err.Error())
+		s.audit(c, "incident.block", target, auditRefused, safeMsg(err))
+		return echo.NewHTTPError(http.StatusConflict, safeMsg(err))
 	}
+	s.audit(c, "incident.block", target, auditOK, "ttl "+duration.String())
 
 	updated, _ := s.DB.GetIncident(id)
 	return c.JSON(http.StatusOK, echo.Map{"message": "IP blocked", "incident": updated})

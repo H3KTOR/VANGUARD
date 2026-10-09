@@ -74,3 +74,22 @@ func guardComponent(g database.GuardStats) health.Component {
 	}
 	return c
 }
+
+// securityComponent reports the abuse-resistance counters. It is informational:
+// refusing hostile requests is the control working, so the state stays healthy,
+// but recent login throttling is stated in the detail so an operator can see
+// that someone is guessing credentials.
+func (s *Server) securityComponent(now time.Time) health.Component {
+	c := health.Component{
+		Name: "api_security", State: health.Healthy,
+		Counters: map[string]uint64{
+			"login_failures": s.sec.loginFailed.Load(), "login_throttled": s.sec.loginThrottled.Load(),
+			"host_rejected": s.sec.hostRejected.Load(), "origin_rejected": s.sec.originRejected.Load(),
+			"body_rejected": s.sec.bodyRejected.Load(), "operations_rate_limited": s.sec.opLimited.Load(),
+		},
+	}
+	if last := s.sec.lastThrottle.Load(); last > 0 && now.Sub(time.Unix(last, 0)) < lossWindow {
+		c.Detail = "login throttling engaged in the last 15 minutes (repeated failed sign-ins from one address)"
+	}
+	return c
+}

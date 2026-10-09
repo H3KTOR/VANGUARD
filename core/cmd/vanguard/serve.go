@@ -228,6 +228,14 @@ func buildApp(cfg serveConfig) (*app, error) {
 		return out
 	}
 	echoSrv.Guard = database.NewQueryGuard(cfg.QueryLimit, 250*time.Millisecond, cfg.QueryTimeout)
+	echoSrv.Security = api.SecurityConfig{
+		AllowedOrigins: cfg.AllowedOrigins, AllowedHosts: cfg.AllowedHosts, AllowRemoteBootstrap: cfg.AllowRemoteBootstrap,
+	}
+	echoSrv.BackupMinGap = 30 * time.Second
+	echoSrv.SimulateMinGap = time.Second
+	if w := bindWarning(cfg.HTTPAddr); w != "" {
+		log.Printf("[serve] WARNING: %s", w)
+	}
 	if honeypotSrv != nil {
 		echoSrv.Runtime.HoneypotStats = honeypotSrv.Stats
 	}

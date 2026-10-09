@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -26,14 +25,9 @@ func (s *Server) handleLatestMetric(c echo.Context) error {
 // handleMetricsHistory returns a time-series window for charts.
 // ?hours=1 (default 1, max 168) controls how far back to look.
 func (s *Server) handleMetricsHistory(c echo.Context) error {
-	hours := 1
-	if v := c.QueryParam("hours"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			hours = n
-		}
-	}
-	if hours > 168 {
-		hours = 168
+	hours, err := atoiBounded(c, "hours", 1, 1, 168)
+	if err != nil {
+		return err
 	}
 	since := time.Now().UTC().Add(-time.Duration(hours) * time.Hour)
 	metrics, err := s.DB.GetMetricsSince(since)

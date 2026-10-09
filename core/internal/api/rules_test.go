@@ -36,10 +36,7 @@ func rulesServer(t *testing.T) (*httptest.Server, *database.DB, string, string, 
 	ts := httptest.NewServer(srv.NewEcho())
 	t.Cleanup(ts.Close)
 	admin := bootstrapAdminToken(t, ts)
-	viewer, _, err := mgr.IssueToken(&database.User{Email: "viewer@x", Role: database.RoleViewer})
-	if err != nil {
-		t.Fatal(err)
-	}
+	viewer := realUserToken(t, db, mgr, "viewer@x.test", database.RoleViewer)
 	return ts, db, admin, viewer, st
 }
 

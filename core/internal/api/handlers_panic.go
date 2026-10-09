@@ -41,13 +41,15 @@ func (s *Server) handlePanicEnter(c echo.Context) error {
 	if !req.Confirmed {
 		return echo.NewHTTPError(http.StatusBadRequest, "panic mode requires confirmed=true (two-step confirmation)")
 	}
-	reason := req.Reason
+	reason := cleanReason(req.Reason, maxReasonLength)
 	if claims := currentClaims(c); claims != nil {
 		reason += " (activated by " + claims.Email + ")"
 	}
 	if err := s.Autopilot.EnterPanicMode(c.Request().Context(), c.RealIP(), reason, true); err != nil {
-		return echo.NewHTTPError(http.StatusConflict, err.Error())
+		s.audit(c, "panic.enter", "", auditFailed, safeMsg(err))
+		return echo.NewHTTPError(http.StatusConflict, safeMsg(err))
 	}
+	s.audit(c, "panic.enter", "", auditOK, "")
 	return c.JSON(http.StatusOK, s.Autopilot.PanicModeStatus())
 }
 
@@ -65,8 +67,10 @@ func (s *Server) handlePanicExit(c echo.Context) error {
 		reason += " by " + claims.Email
 	}
 	if err := s.Autopilot.ExitPanicMode(c.Request().Context(), reason); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
+		s.audit(c, "panic.exit", "", auditFailed, safeMsg(err))
+		return echo.NewHTTPError(http.StatusInternalServerError, safeMsg(err))
 	}
+	s.audit(c, "panic.exit", "", auditOK, "")
 	return c.JSON(http.StatusOK, s.Autopilot.PanicModeStatus())
 }
 
