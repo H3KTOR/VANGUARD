@@ -303,6 +303,7 @@ func (a *app) runMaintenanceTick(ctx context.Context) {
 	}
 
 	now := time.Now().UTC()
+	a.engine.ReapDedupe(now)
 	if n := a.engine.State().Reap(now); n > 0 {
 		log.Printf("[serve] maintenance: reaped %d idle in-memory IP tracker(s)", n)
 	}

@@ -3,6 +3,7 @@ package detection
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -115,6 +116,9 @@ func NewEngine(cfg Config) *Engine {
 // State exposes the underlying sliding-window state, primarily so
 // cmd/vanguard's background maintenance loop can call Reap() periodically.
 func (e *Engine) State() *State { return e.state }
+
+// ReapDedupe drops expired incident-dedupe entries (maintenance loop).
+func (e *Engine) ReapDedupe(now time.Time) int { return e.dedupe.Reap(now) }
 
 // ChainTracker exposes the attack-chain correlation state, primarily so
 // cmd/vanguard's background maintenance loop can call Reap() periodically
@@ -396,7 +400,8 @@ func (e *Engine) ruleWebDirScan(ev *Event) {
 // ---------------------------------------------------------------------------
 
 func (e *Engine) rulePathTraversal(ev *Event) {
-	if !containsAny(ev.Path, thresholds.PathTraversalPatterns) {
+	if !containsAny(ev.Path, thresholds.PathTraversalPatterns) &&
+		!containsAny(decodeRequestTarget(ev.Path), thresholds.PathTraversalPatterns) {
 		return
 	}
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentPathTraversal) {
@@ -424,7 +429,11 @@ func (e *Engine) rulePathTraversal(ev *Event) {
 // ---------------------------------------------------------------------------
 
 func (e *Engine) ruleSQLiXSS(ev *Event) {
-	if !containsAny(strings.ToLower(ev.Path), thresholds.SQLiXSSPatterns) {
+	// Access logs record the request target as sent (percent-encoded), so
+	// "union%20select" / "%3Cscript%3E" must be decoded before matching or
+	// trivially-encoded probes evade the signature set.
+	if !containsAny(strings.ToLower(ev.Path), thresholds.SQLiXSSPatterns) &&
+		!containsAny(strings.ToLower(decodeRequestTarget(ev.Path)), thresholds.SQLiXSSPatterns) {
 		return
 	}
 	if !e.dedupe.allow(ev.SourceIP, database.IncidentSQLiXSS) {
@@ -641,9 +650,9 @@ func (e *Engine) createIncident(itype database.IncidentType, ev *Event, attemptC
 	for k, v := range extra {
 		meta[k] = v
 	}
-	if err := inc.SetMetadata(meta); err != nil {
-		log.Printf("[detection] failed to encode metadata for %s incident on %s: %v", itype, ev.SourceIP, err)
-	}
+	// Provenance, secret redaction and the size bound are applied here,
+	// at the single choke point, so no detector can bypass them.
+	inc.Metadata = prepareEvidence(itype, meta)
 
 	if err := e.db.CreateIncident(inc); err != nil {
 		log.Printf("[detection] failed to persist %s incident on %s: %v", itype, ev.SourceIP, err)
@@ -652,6 +661,22 @@ func (e *Engine) createIncident(itype database.IncidentType, ev *Event, attemptC
 
 	log.Printf("[detection] incident #%d: %s from %s (risk=%d/%s)", inc.ID, itype, ev.SourceIP, breakdown.Total, inc.Severity)
 	e.notify.OnIncident(inc)
+}
+
+// decodeRequestTarget percent-decodes a logged request target for
+// signature matching (up to two passes, so double-encoded payloads such as
+// %252e%252e are also seen; '+' is treated as a space). Malformed escapes
+// leave the input unchanged for that pass. Output is length-bounded by the
+// input (decoding never grows it).
+func decodeRequestTarget(p string) string {
+	for i := 0; i < 2; i++ {
+		d, err := url.QueryUnescape(p)
+		if err != nil || d == p {
+			break
+		}
+		p = d
+	}
+	return p
 }
 
 func isSensitivePath(path string) bool {
@@ -689,6 +714,11 @@ func newDedupeWindow(cooldown time.Duration) *dedupeWindow {
 	return &dedupeWindow{cooldown: cooldown, last: make(map[string]time.Time)}
 }
 
+// maxDedupeEntries bounds the dedupe map. Keys embed attacker-influenced
+// values (source IP, finding subject), so without a cap a spray of
+// distinct sources would grow it without limit.
+const maxDedupeEntries = 20000
+
 func (d *dedupeWindow) allow(ip string, itype database.IncidentType) bool {
 	key := fmt.Sprintf("%s|%s", ip, itype)
 	d.mu.Lock()
@@ -697,6 +727,55 @@ func (d *dedupeWindow) allow(ip string, itype database.IncidentType) bool {
 	if last, ok := d.last[key]; ok && now.Sub(last) < d.cooldown {
 		return false
 	}
+	if len(d.last) >= maxDedupeEntries {
+		d.reapLocked(now)
+		if len(d.last) >= maxDedupeEntries {
+			d.evictOldestLocked()
+		}
+	}
 	d.last[key] = now
 	return true
+}
+
+// Reap drops entries whose cooldown has expired (they no longer
+// suppress anything) and returns how many were removed.
+func (d *dedupeWindow) Reap(now time.Time) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.reapLocked(now)
+}
+
+func (d *dedupeWindow) reapLocked(now time.Time) int {
+	n := 0
+	for k, t := range d.last {
+		if now.Sub(t) >= d.cooldown {
+			delete(d.last, k)
+			n++
+		}
+	}
+	return n
+}
+
+// evictOldestLocked removes the single oldest entry. Only reached when
+// the map is full of still-live entries; the worst consequence is one
+// early re-raise of an incident, which is preferable to unbounded growth.
+func (d *dedupeWindow) evictOldestLocked() {
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for k, t := range d.last {
+		if first || t.Before(oldest) {
+			oldestKey, oldest, first = k, t, false
+		}
+	}
+	if !first {
+		delete(d.last, oldestKey)
+	}
+}
+
+// Len reports the current number of tracked keys (tests/diagnostics).
+func (d *dedupeWindow) Len() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.last)
 }
