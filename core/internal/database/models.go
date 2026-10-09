@@ -657,6 +657,7 @@ func AllModels() []any {
 		&Incident{},
 		&FirewallRule{},
 		&HostFileBaseline{},
+		&IncidentEvent{},
 	}
 }
 

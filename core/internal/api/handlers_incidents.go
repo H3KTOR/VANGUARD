@@ -60,10 +60,16 @@ func (s *Server) handleGetIncident(c echo.Context) error {
 
 type updateStatusRequest struct {
 	Status string `json:"status"`
+	// Reason is optional analyst free text recorded (sanitized, bounded)
+	// in the incident's audit trail.
+	Reason string `json:"reason"`
 }
 
 // handleUpdateIncidentStatus drives the dashboard's "Investigate" / "Mark
-// False Positive" / "Resolve" incident-card actions from the spec's mockup.
+// False Positive" / "Resolve" incident actions. Transitions are validated
+// against the lifecycle table in database/lifecycle.go and applied
+// atomically (compare-and-swap); an illegal transition is a 409, a
+// concurrent modification is a 409, and nothing is written in either case.
 func (s *Server) handleUpdateIncidentStatus(c echo.Context) error {
 	id, err := parseUintParam(c, "id")
 	if err != nil {
@@ -74,20 +80,47 @@ func (s *Server) handleUpdateIncidentStatus(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid request body")
 	}
 	status := database.IncidentStatus(req.Status)
-	switch status {
-	case database.StatusOpen, database.StatusAutoBlocked, database.StatusInvestigating,
-		database.StatusResolved, database.StatusFalsePositive:
-	default:
+	if !database.IsKnownStatus(status) {
 		return echo.NewHTTPError(http.StatusBadRequest, "invalid status value")
 	}
-	if err := s.DB.UpdateIncidentStatus(id, status); err != nil {
+	actor := "analyst"
+	if claims := currentClaims(c); claims != nil && claims.Email != "" {
+		actor = claims.Email
+	}
+	inc, err := s.DB.TransitionIncident(id, status, actor, req.Reason)
+	switch {
+	case err == nil:
+		return c.JSON(http.StatusOK, inc)
+	case errors.Is(err, database.ErrNotFound):
+		return echo.NewHTTPError(http.StatusNotFound, "incident not found")
+	case errors.Is(err, database.ErrInvalidTransition):
+		return echo.NewHTTPError(http.StatusConflict, err.Error())
+	case errors.Is(err, database.ErrConflict):
+		return echo.NewHTTPError(http.StatusConflict, "incident was modified concurrently; reload and retry")
+	default:
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to update incident status")
 	}
-	inc, err := s.DB.GetIncident(id)
+}
+
+// handleListIncidentEvents returns the incident's bounded audit trail
+// (lifecycle changes, response attempts/outcomes, verifications), oldest
+// first. Older incidents simply have an empty list.
+func (s *Server) handleListIncidentEvents(c echo.Context) error {
+	id, err := parseUintParam(c, "id")
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "incident not found")
+		return err
 	}
-	return c.JSON(http.StatusOK, inc)
+	if _, err := s.DB.GetIncident(id); err != nil {
+		if errors.Is(err, database.ErrNotFound) {
+			return echo.NewHTTPError(http.StatusNotFound, "incident not found")
+		}
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to fetch incident")
+	}
+	evs, err := s.DB.ListIncidentEvents(id)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "failed to list incident events")
+	}
+	return c.JSON(http.StatusOK, echo.Map{"events": evs, "count": len(evs)})
 }
 
 type blockIncidentRequest struct {

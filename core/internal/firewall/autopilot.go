@@ -240,7 +240,7 @@ func (a *Autopilot) Ban(ctx context.Context, ip, reason string, duration time.Du
 		return fmt.Errorf("failed to persist firewall rule: %w", err)
 	}
 	if incidentID != nil {
-		if err := a.db.UpdateIncidentStatus(*incidentID, database.StatusAutoBlocked); err != nil {
+		if _, err := a.db.MarkAutoBlocked(*incidentID, "autopilot", reason); err != nil {
 			log.Printf("[autopilot] failed to update incident #%d status: %v", *incidentID, err)
 		}
 	}

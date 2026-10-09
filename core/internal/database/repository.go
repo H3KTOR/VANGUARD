@@ -104,18 +104,6 @@ func (db *DB) GetIncident(id uint) (*Incident, error) {
 	return &inc, nil
 }
 
-// UpdateIncidentStatus transitions an incident's status (e.g. to
-// investigating / resolved / false_positive), stamping ResolvedAt for
-// terminal states.
-func (db *DB) UpdateIncidentStatus(id uint, status IncidentStatus) error {
-	updates := map[string]any{"status": status}
-	if status == StatusResolved || status == StatusFalsePositive {
-		now := time.Now().UTC()
-		updates["resolved_at"] = &now
-	}
-	return db.Model(&Incident{}).Where("id = ?", id).Updates(updates).Error
-}
-
 // SetIncidentAIAnalysis stores the AI-generated summary text produced by the
 // Python toolkit for a given incident.
 func (db *DB) SetIncidentAIAnalysis(id uint, analysis string) error {

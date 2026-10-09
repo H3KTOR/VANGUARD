@@ -89,10 +89,10 @@ func persistIncident(db *database.DB, p persistParams) (*Result, error) {
 			if err := db.CreateFirewallRule(rule); err != nil {
 				return nil, fmt.Errorf("simulator: failed to persist firewall rule: %w", err)
 			}
-			if err := db.UpdateIncidentStatus(inc.ID, database.StatusAutoBlocked); err != nil {
+			if _, err := db.MarkAutoBlocked(inc.ID, "simulator", "simulated autopilot ban"); err != nil {
 				return nil, fmt.Errorf("simulator: failed to update incident status: %w", err)
 			}
-			inc.Status = database.StatusAutoBlocked
+			inc.Status = database.StatusAutoBlocked // simulator incidents are always freshly open
 			narrative = append(narrative, fmt.Sprintf("Autopilot issued TTL ban on %s for %s (expires %s)",
 				p.SourceIP, banDuration, unbanAt.Format(time.RFC3339)))
 			result.FirewallRule = rule
