@@ -12,6 +12,7 @@ import IncidentsPage from './components/IncidentsPage.jsx'
 import FirewallPage from './components/FirewallPage.jsx'
 import HoneypotPage from './components/HoneypotPage.jsx'
 import MetricsPage from './components/MetricsPage.jsx'
+import IntelPage from './components/IntelPage.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
 
 function formatUptime(seconds) {
@@ -91,6 +92,7 @@ export default function App() {
           {page === 'incidents' && <IncidentsPage />}
           {page === 'firewall' && <FirewallPage />}
           {page === 'honeypot' && <HoneypotPage />}
+          {page === 'intel' && <IntelPage />}
           {page === 'metrics' && <MetricsPage />}
           {page === 'settings' && <SettingsPage user={user} />}
         </main>

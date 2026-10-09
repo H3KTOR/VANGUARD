@@ -7,6 +7,7 @@ import {
   Settings,
   ShieldCheck,
   Circle,
+  Crosshair,
 } from 'lucide-react'
 
 // Sidebar: fixed left navigation matching the reference layout --
@@ -18,6 +19,7 @@ const OPERATIONS_ITEMS = [
   { id: 'incidents', label: 'Incidents', icon: ShieldAlert },
   { id: 'firewall', label: 'Firewall Rules', icon: Flame },
   { id: 'honeypot', label: 'Honeypot', icon: Radio },
+  { id: 'intel', label: 'Threat Intel', icon: Crosshair },
 ]
 
 const PLATFORM_ITEMS = [

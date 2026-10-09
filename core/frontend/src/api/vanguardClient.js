@@ -28,10 +28,11 @@ const TOKEN_KEY = 'vanguard_token'
 const USER_KEY = 'vanguard_user'
 
 export class VanguardApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, body) {
     super(message)
     this.name = 'VanguardApiError'
     this.status = status
+    this.body = body // parsed JSON error payload, when the server sent one
   }
 }
 
@@ -76,7 +77,7 @@ async function request(path, { method = 'GET', body, auth = true, signal } = {})
     res = await fetch(`${BASE_URL}${path}`, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
       signal,
     })
   } catch (networkErr) {
@@ -98,7 +99,7 @@ async function request(path, { method = 'GET', body, auth = true, signal } = {})
       unauthorizedHandler()
     }
     const message = (payload && payload.error) || `Request failed (${res.status})`
-    throw new VanguardApiError(message, res.status)
+    throw new VanguardApiError(message, res.status, payload)
   }
 
   return payload
@@ -177,6 +178,37 @@ export function getIncidentEvents(id) {
 
 export function getResponsePlan(id) {
   return request(`/incidents/${id}/response-plan`)
+}
+
+export function getIntelStatus() {
+  return request('/intel/status')
+}
+
+export function listIOCs(filters = {}) {
+  const params = new URLSearchParams()
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && v !== '') params.set(k, v)
+  })
+  const qs = params.toString()
+  return request(`/intel/iocs${qs ? `?${qs}` : ''}`)
+}
+
+export function setIOCEnabled(id, enabled) {
+  return request(`/intel/iocs/${id}`, { method: 'PUT', body: { enabled } })
+}
+
+// importIOCs posts the raw feed text (never parsed client-side).
+export function importIOCs(text, { strict = false } = {}) {
+  return request(`/intel/import${strict ? '?strict=true' : ''}`, { method: 'POST', body: text })
+}
+
+export function listIOCImports(limit = 20) {
+  return request(`/intel/imports?limit=${limit}`)
+}
+
+export function huntMatches(query = {}) {
+  const qs = new URLSearchParams(query).toString()
+  return request(`/hunt/matches${qs ? `?${qs}` : ''}`)
 }
 
 export function getDetectorStatus() {
@@ -279,6 +311,12 @@ export default {
   getIncidentEvents,
   getResponsePlan,
   getDetectorStatus,
+  getIntelStatus,
+  listIOCs,
+  setIOCEnabled,
+  importIOCs,
+  listIOCImports,
+  huntMatches,
   blockIncidentIP,
   listFirewallRules,
   manualBlock,
