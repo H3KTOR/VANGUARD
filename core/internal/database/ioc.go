@@ -69,7 +69,7 @@ type IOC struct {
 	// ExpiresAt nil means "no expiry supplied" -- NOT expired.
 	ExpiresAt *time.Time `gorm:"index" json:"expires_at,omitempty"`
 
-	Enabled bool `gorm:"not null;default:true;index" json:"enabled"`
+	Enabled bool `gorm:"not null;index" json:"enabled"` // no gorm default: a zero (false) must be stored as false
 	// DisabledByOperator pins an operator's disable so a re-import cannot
 	// silently re-enable an indicator that was judged incorrect.
 	DisabledByOperator bool `gorm:"not null;default:false" json:"disabled_by_operator"`
