@@ -74,3 +74,52 @@ export const BAD_SCAN_RESULTS = new Set(['failed', 'skipped', 'timeout'])
 export function scannerAttention(detectors) {
   return (Array.isArray(detectors) ? detectors : []).filter((d) => BAD_SCAN_RESULTS.has(d.last_result))
 }
+
+// ---------------------------------------------------------------------------
+// Phase 7: investigation view helpers
+// ---------------------------------------------------------------------------
+
+export const PROVENANCE_LABEL = {
+  observed: 'Observed',
+  derived: 'Derived context',
+  correlated: 'Correlated (inferred)',
+  analyst: 'Analyst',
+  response: 'Response',
+}
+
+export const PROVENANCE_STYLE = {
+  observed: 'bg-green-50 text-green-700 ring-green-200',
+  derived: 'bg-slate-100 text-slate-600 ring-slate-300',
+  correlated: 'bg-amber-50 text-amber-800 ring-amber-200',
+  analyst: 'bg-blue-50 text-blue-700 ring-blue-200',
+  response: 'bg-purple-50 text-purple-700 ring-purple-200',
+}
+
+// relationText renders a graph edge without upgrading it to attribution.
+export function relationText(edge) {
+  if (!edge) return ''
+  const to = edge.to || ''
+  switch (edge.relation) {
+    case 'matched':
+      return `matched indicator ${to} (direct observation)`
+    case 'matched_context':
+      return `source address listed by ${to} (context only)`
+    case 'triggered_response':
+      return `a firewall rule (${to}) was created for it`
+    case 'shares_indicator':
+      return `also matched the same indicator as ${to} — does not establish the same actor`
+    default:
+      return `${edge.relation} ${to}`
+  }
+}
+
+// timelineNotice: never let an empty list read as "nothing happened".
+export function timelineNotice(tl) {
+  if (!tl) return null
+  if (tl.total === 0) return 'No persisted records for this incident.'
+  return null
+}
+
+export function downloadName(id) {
+  return `vanguard-incident-${Number(id) || 0}.json`
+}

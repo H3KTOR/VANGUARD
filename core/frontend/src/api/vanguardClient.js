@@ -211,6 +211,37 @@ export function huntMatches(query = {}) {
   return request(`/hunt/matches${qs ? `?${qs}` : ''}`)
 }
 
+export function getIncidentTimeline(id, { offset = 0, limit = 100 } = {}) {
+  return request(`/incidents/${id}/timeline?offset=${offset}&limit=${limit}`)
+}
+
+export function getIncidentGraph(id) {
+  return request(`/incidents/${id}/graph`)
+}
+
+export function listNotes(id) {
+  return request(`/incidents/${id}/notes`)
+}
+
+export function addNote(id, text) {
+  return request(`/incidents/${id}/notes`, { method: 'POST', body: { text } })
+}
+
+export function deleteNote(id, noteId) {
+  return request(`/incidents/${id}/notes/${noteId}`, { method: 'DELETE' })
+}
+
+// exportIncident returns the raw JSON text of the (server-side redacted)
+// export so the caller can offer it as a download.
+export async function exportIncident(id) {
+  const token = getToken()
+  const res = await fetch(`${BASE_URL}/incidents/${id}/export`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new VanguardApiError(`Export failed (${res.status})`, res.status)
+  return res.text()
+}
+
 export function getDetectorStatus() {
   return request('/detectors/status')
 }
@@ -311,6 +342,12 @@ export default {
   getIncidentEvents,
   getResponsePlan,
   getDetectorStatus,
+  getIncidentTimeline,
+  getIncidentGraph,
+  listNotes,
+  addNote,
+  deleteNote,
+  exportIncident,
   getIntelStatus,
   listIOCs,
   setIOCEnabled,
