@@ -339,6 +339,12 @@ const (
 	// when /var/lib/dpkg/status is unavailable or unparseable -- see
 	// hostsec/package_drift.go.
 	IncidentPackageDrift IncidentType = "package_drift"
+
+	// IncidentIOCMatch (Phase 6): an observed value (source address, Host,
+	// URL, or file SHA-256) exactly matched an active local threat
+	// indicator. A direct, exact match only -- it says the observation was
+	// listed by a feed, not that the host is compromised or who the actor is.
+	IncidentIOCMatch IncidentType = "ioc_match"
 )
 
 // HostLocalIP is the sentinel SourceIP value used for every host-security
@@ -658,6 +664,9 @@ func AllModels() []any {
 		&FirewallRule{},
 		&HostFileBaseline{},
 		&IncidentEvent{},
+		&IOC{},
+		&IOCImport{},
+		&IOCMatch{},
 	}
 }
 
