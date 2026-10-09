@@ -1,8 +1,20 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { Search, ShieldOff, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import { usePolling } from '../hooks/usePolling.js'
 import { listIncidents, updateIncidentStatus, blockIncidentIP } from '../api/vanguardClient.js'
 import { SEVERITY_BG } from '../utils/severity.js'
+
+// Pretty-prints an incident's Metadata JSON blob (the structured evidence
+// every detector attaches) for the inspectable evidence row. Falls back to
+// the raw string if it isn't valid JSON.
+function formatEvidence(metadata) {
+  if (!metadata) return 'No structured evidence recorded.'
+  try {
+    return JSON.stringify(JSON.parse(metadata), null, 2)
+  } catch {
+    return metadata
+  }
+}
 
 const STATUS_LABEL = {
   open: 'Open',
@@ -16,6 +28,7 @@ export default function IncidentsPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [severityFilter, setSeverityFilter] = useState('')
   const [busyId, setBusyId] = useState(null)
+  const [expandedId, setExpandedId] = useState(null)
   const [error, setError] = useState(null)
 
   const { data, refresh, loading } = usePolling(
@@ -85,8 +98,19 @@ export default function IncidentsPage() {
           </thead>
           <tbody className="divide-y divide-slate-100">
             {incidents.map((inc) => (
-              <tr key={inc.id} className="hover:bg-slate-50/60">
-                <td className="px-4 py-2.5 font-medium text-slate-800 capitalize">{inc.type?.replace(/_/g, ' ')}</td>
+              <Fragment key={inc.id}>
+              <tr className="hover:bg-slate-50/60">
+                <td className="px-4 py-2.5 font-medium text-slate-800 capitalize">
+                  <button
+                    type="button"
+                    title="Toggle evidence"
+                    aria-expanded={expandedId === inc.id}
+                    onClick={() => setExpandedId(expandedId === inc.id ? null : inc.id)}
+                    className="capitalize text-left hover:underline"
+                  >
+                    {inc.type?.replace(/_/g, ' ')}
+                  </button>
+                </td>
                 <td className="px-4 py-2.5 font-mono text-xs text-slate-600">{inc.source_ip}</td>
                 <td className="px-4 py-2.5">
                   <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ring-1 ring-inset ${SEVERITY_BG[inc.severity] || ''}`}>
@@ -133,6 +157,16 @@ export default function IncidentsPage() {
                   </div>
                 </td>
               </tr>
+              {expandedId === inc.id && (
+                <tr className="bg-slate-50">
+                  <td colSpan={7} className="px-4 py-3">
+                    <pre className="max-h-72 overflow-auto rounded-lg bg-slate-900 p-3 text-[11px] leading-relaxed text-slate-100">
+                      {formatEvidence(inc.metadata)}
+                    </pre>
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             ))}
             {incidents.length === 0 && !loading && (
               <tr>
