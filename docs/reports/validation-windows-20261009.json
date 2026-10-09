@@ -1,0 +1,66 @@
+{
+  "generated_at": "2026-10-09T20:28:46Z",
+  "environment": {
+    "go": "go1.27.0",
+    "goarch": "amd64",
+    "goos": "windows"
+  },
+  "go_tests": {
+    "passed": 498,
+    "failed": 0,
+    "skipped": 10,
+    "failing_tests": null,
+    "skipped_tests": [
+      "vanguard/core/internal/hostsec/TestBinaryIntegrityWatcher_DetectsPermChange",
+      "vanguard/core/internal/hostsec/TestConfigDrift_ModeChange",
+      "vanguard/core/internal/hostsec/TestListening_ProcessOwnerResolutionAndChange",
+      "vanguard/core/internal/hostsec/TestPostureDetector_InvalidOwnerSpecSkipsFailSafe",
+      "vanguard/core/internal/hostsec/TestPostureDetector_SafeModeNoFinding",
+      "vanguard/core/internal/hostsec/TestPostureDetector_UnexpectedOwnerDetected",
+      "vanguard/core/internal/hostsec/TestPostureDetector_UnsafeThenFixedThenUnsafeAgainReports",
+      "vanguard/core/internal/hostsec/TestSUIDMonitor_CriticalEscalationInWritableDir",
+      "vanguard/core/internal/hostsec/TestSUIDMonitor_DetectsDeletedSetuidBinary",
+      "vanguard/core/internal/hostsec/TestSUIDMonitor_DetectsNewSetuidBinary"
+    ],
+    "failed_packages_without_test_result": null
+  },
+  "lab": {
+    "started_at": "2026-10-09T20:27:18Z",
+    "finished_at": "2026-10-09T20:27:18Z",
+    "note": "jq missing: suite-level detail only",
+    "suites": [
+      {
+        "suite": "attack",
+        "status": "blocked",
+        "detail": "missing 'docker'; missing 'jq'; "
+      },
+      {
+        "suite": "phase4",
+        "status": "blocked",
+        "detail": "missing 'docker'; missing 'jq'; "
+      },
+      {
+        "suite": "phase5",
+        "status": "blocked",
+        "detail": "missing 'docker'; missing 'jq'; "
+      },
+      {
+        "suite": "phase6",
+        "status": "blocked",
+        "detail": "missing 'docker'; missing 'jq'; "
+      }
+    ],
+    "scenarios": []
+  },
+  "lab_note": "suite status comes from lab/run-all.sh: only assertions the scripts printed count; blocked/skipped suites did not run",
+  "not_run": {
+    "Linux-only tests": "this run was on Windows (10 hostsec tests skip)",
+    "race detector": "no CGO toolchain on this machine",
+    "real ufw verification": "no disposable Linux firewall"
+  },
+  "caveats": [
+    "Counts are test events found in the supplied files; nothing is extrapolated.",
+    "Passing synthetic tests/lab scenarios show behaviour on isolated fixtures, not real-world detection efficacy, false-negative or false-positive rates.",
+    "A report generated on one OS says nothing about another: Linux-specific behaviour is only verified by a Linux run."
+  ]
+}
