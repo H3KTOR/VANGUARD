@@ -79,7 +79,7 @@ jobs:
         run: npm ci && npm run build
       - name: tests (JSON for the validation report)
         run: go test -json ./... | tee gotest.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && matrix.go == 'mod'
         with: { name: gotest-linux, path: core/gotest.json }
 
@@ -93,7 +93,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with: { go-version-file: core/go.mod }
       - run: go test -json ./... | tee gotest.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with: { name: gotest-windows, path: core/gotest.json }
 
@@ -154,7 +154,7 @@ jobs:
               *) echo "The scan did not run (outcome: ${{ steps.scan.outcome }}). This is NOT a clean result." ;;
             esac
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with: { name: govulncheck, path: govulncheck.txt, if-no-files-found: ignore }
 
@@ -177,7 +177,7 @@ jobs:
             if [ -f lab/results/summary.json ]; then echo '```json'; cat lab/results/summary.json; echo '```'
             else echo "No summary was produced: the lab did NOT run to completion."; fi
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with: { name: lab-results, path: lab/results, if-no-files-found: ignore }
 
@@ -212,7 +212,7 @@ jobs:
             if cmp -s "$f" "$RUNNER_TEMP/clone-dist/$(basename "$f")"; then echo "IDENTICAL  $(basename "$f")"; else echo "DIFFERENT  $(basename "$f")"; status=1; fi
           done
           exit $status
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: release-unsigned, path: dist }
 
   # Signing happens ONLY on a version tag and ONLY if the repository owner has
@@ -250,7 +250,7 @@ jobs:
           printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
           trap 'rm -f "$key"' EXIT
           bash deploy/release.sh --version "${GITHUB_REF_NAME}" --out dist --sign-key "$key"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: release-signed, path: dist }
 
   # --------------------------------------------------------------- report
@@ -286,7 +286,7 @@ jobs:
           fi
           for f in in/validation-*.md; do [ -f "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"; done
           true
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with: { name: validation-report, path: core/in, if-no-files-found: ignore }
 
