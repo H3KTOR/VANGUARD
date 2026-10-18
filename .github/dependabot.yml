@@ -1,0 +1,18 @@
+# Proposes (never merges) updates. Every proposal is a pull request that CI must
+# pass; GitHub Actions stay pinned to full commit SHAs and Dependabot keeps the
+# "# vX.Y.Z" comment in step. NOT YET ACTIVE until this file is on the default
+# branch of the GitHub repository.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: gomod
+    directory: /core
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /core/frontend
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5

@@ -11,7 +11,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: build the VANGUARD binary from the real source tree.
 # ---------------------------------------------------------------------------
-FROM golang:1.25-bookworm AS build
+FROM golang:1.27-bookworm AS build
 WORKDIR /src
 COPY core/go.mod core/go.sum ./
 RUN go mod download

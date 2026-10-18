@@ -70,3 +70,9 @@ core/cmd/vanguard/dist/*
 /dist/
 /dist.tmp*/
 /dist.sums*
+
+# signing keys must never be committed
+*.key
+*.priv
+*.pem
+release-signing*
