@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
-	github.com/labstack/echo/v4 v4.15.4
+	github.com/labstack/echo/v4 v4.16.2
 	github.com/nxadm/tail v1.4.11
 	github.com/shirou/gopsutil/v3 v3.24.5
 	golang.org/x/crypto v0.57.0
